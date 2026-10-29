@@ -13,6 +13,7 @@ import requests
 from dotenv import load_dotenv
 
 import config
+import news
 from binance_client import INTERVAL_MS, BinanceClient, BinanceError
 from strategy import BUY, SELL, add_signals
 
@@ -28,6 +29,7 @@ TRADES_FILE = BASE_DIR / "trades.csv"
 LOG_FILE = BASE_DIR / "bot.log"
 SETTINGS_FILE = BASE_DIR / "settings.json"
 LOCK_FILE = BASE_DIR / "bot.lock"
+NEWS_CACHE_FILE = BASE_DIR / "news_cache.json"
 
 BOT_TAG = "bot"
 INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
@@ -75,6 +77,11 @@ def default_settings() -> dict:
         "max_daily_loss_usdt": config.MAX_DAILY_LOSS_USDT,
         "stop_loss_pct": config.STOP_LOSS_PCT,
         "take_profit_pct": config.TAKE_PROFIT_PCT,
+        "news_filter": config.NEWS_FILTER,
+        "news_before_min": config.NEWS_BEFORE_MIN,
+        "news_after_min": config.NEWS_AFTER_MIN,
+        "news_countries": config.NEWS_COUNTRIES,
+        "news_impact": config.NEWS_IMPACT,
     }
 
 
@@ -96,6 +103,11 @@ def validate_settings(values: dict) -> dict:
             "max_daily_loss_usdt": float(values["max_daily_loss_usdt"]),
             "stop_loss_pct": float(values.get("stop_loss_pct") or 0),
             "take_profit_pct": float(values.get("take_profit_pct") or 0),
+            "news_filter": values.get("news_filter") in (True, 1, "1", "true"),
+            "news_before_min": int(values.get("news_before_min") or 0),
+            "news_after_min": int(values.get("news_after_min") or 0),
+            "news_countries": str(values.get("news_countries", "")),
+            "news_impact": str(values.get("news_impact", "")),
         }
     except (KeyError, TypeError, ValueError):
         raise ValueError("Preencha todos os campos com números válidos")
@@ -112,6 +124,11 @@ def validate_settings(values: dict) -> dict:
         raise ValueError("Stop loss precisa estar entre 0 e 50% (0 desliga)")
     if not 0 <= s["take_profit_pct"] < 100:
         raise ValueError("Stop gain precisa estar entre 0 e 100% (0 desliga)")
+    if not (0 <= s["news_before_min"] <= 240 and 0 <= s["news_after_min"] <= 240):
+        raise ValueError("A pausa antes e depois das notícias precisa estar entre 0 e 240 minutos")
+    if s["news_impact"] not in news.IMPACTS:
+        raise ValueError("Impacto das notícias inválido")
+    s["news_countries"] = news.validate_countries(s["news_countries"])
     return s
 
 
@@ -216,6 +233,14 @@ class Bot:
             stops.append(f"stop gain {s['take_profit_pct']:g}%")
         log(f"Robô iniciado: {config.SYMBOL} {s['interval']}, SMA {s['fast_sma']} x {s['slow_sma']}, "
             f"{s['trade_usdt']:g} USDT por compra" + (", " + " e ".join(stops) if stops else ""))
+        if s["news_filter"]:
+            events = self._news_events()
+            if events is None:
+                log("Calendário de notícias indisponível agora. O robô tenta de novo mais tarde.")
+            else:
+                upcoming = [e for e in events if e["time"] >= time.time()]
+                log(f"Filtro de notícias ligado: pausa {s['news_before_min']} min antes e "
+                    f"{s['news_after_min']} min depois. {len(upcoming)} notícia(s) relevante(s) pela frente nesta semana.")
 
         while not self.stop_event.is_set():
             try:
@@ -257,10 +282,29 @@ class Bot:
         if last["signal"] == BUY and not holding:
             if state["day_pnl"] <= -s["max_daily_loss_usdt"]:
                 log("Sinal de compra ignorado: limite de perda diária atingido.")
+            elif blocking := self._news_block():
+                when = datetime.fromtimestamp(blocking["time"]).strftime("%d/%m %H:%M")
+                log(f"Sinal de compra ignorado: notícia {blocking['country']} \"{blocking['title']}\" às {when}.")
             else:
                 self.buy(state)
         elif last["signal"] == SELL and holding:
             self.sell(state)
+
+    def _news_events(self) -> list[dict] | None:
+        events, fetched_at = news.load_events(NEWS_CACHE_FILE)
+        if not fetched_at:
+            return None
+        return news.relevant(events, news.parse_countries(self.s["news_countries"]), self.s["news_impact"])
+
+    def _news_block(self) -> dict | None:
+        s = self.s
+        if not s["news_filter"]:
+            return None
+        events = self._news_events()
+        if events is None:
+            log("Calendário de notícias indisponível. Seguindo sem o filtro.")
+            return None
+        return news.blocking_event(events, time.time(), s["news_before_min"], s["news_after_min"])
 
     def buy(self, state: dict) -> None:
         market = self.market

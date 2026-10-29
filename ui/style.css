@@ -193,6 +193,28 @@ fieldset:disabled input, fieldset:disabled select { opacity: 0.6; }
 }
 
 .tag { font-size: 11px; color: #f5c518; }
+
+.field input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+
+.news-alert {
+  display: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: #3a3200;
+  color: #f5c518;
+}
+.news-alert.show { display: block; }
+
+.news-item { padding: 6px 0; border-top: 1px solid var(--border); }
+.news-item:first-child { border-top: none; padding-top: 0; }
+.news-item.active { color: #f5c518; }
+.news-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.news-title { font-size: 13px; }
+.impact { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.impact.High { background: var(--red); }
+.impact.Medium { background: #ff9800; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 2px; }
 td { padding: 4px 2px; border-top: 1px solid var(--border); }

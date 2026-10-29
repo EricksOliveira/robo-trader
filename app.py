@@ -1,5 +1,6 @@
 import math
 import threading
+import time
 from datetime import datetime
 from decimal import Decimal
 
@@ -7,15 +8,17 @@ import requests
 import webview
 
 import config
+import news
 from binance_client import INTERVAL_MS, BinanceError
 from bot import (
     BOT_TAG,
     INTERVALS,
     LOCK_FILE,
     LOG_FILE,
+    NEWS_CACHE_FILE,
+    RESOURCE_DIR,
     Bot,
     InstanceLock,
-    RESOURCE_DIR,
     Market,
     fee_in,
     load_settings,
@@ -133,6 +136,21 @@ class Api:
             "elsewhere": not running and self._bot_lock.held_elsewhere(),
             "settings": load_settings(),
             "log": lines,
+        }
+
+    def get_news(self) -> dict:
+        s = load_settings()
+        events, fetched_at = news.load_events(NEWS_CACHE_FILE)
+        events = news.relevant(events, news.parse_countries(s["news_countries"]), s["news_impact"])
+        now = time.time()
+        upcoming = [e for e in events if e["time"] + s["news_after_min"] * 60 >= now][:8]
+        for e in upcoming:
+            e["label"] = datetime.fromtimestamp(e["time"]).strftime("%d/%m %H:%M")
+        return {
+            "events": upcoming,
+            "active": news.blocking_event(events, now, s["news_before_min"], s["news_after_min"]),
+            "filter": s["news_filter"],
+            "fetched": datetime.fromtimestamp(fetched_at).strftime("%d/%m %H:%M") if fetched_at else None,
         }
 
     def start_bot(self, values: dict) -> dict:

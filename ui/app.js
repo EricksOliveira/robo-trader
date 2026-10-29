@@ -281,16 +281,67 @@ const BOT_FIELDS = {
   max_daily_loss_usdt: "bot-max-loss",
   stop_loss_pct: "bot-sl",
   take_profit_pct: "bot-tp",
+  news_filter: "bot-news",
+  news_before_min: "bot-news-before",
+  news_after_min: "bot-news-after",
+  news_countries: "bot-news-countries",
+  news_impact: "bot-news-impact",
 };
 
 function fillBotForm(settings) {
-  for (const [key, id] of Object.entries(BOT_FIELDS)) $(id).value = settings[key];
+  for (const [key, id] of Object.entries(BOT_FIELDS)) {
+    if ($(id).type === "checkbox") $(id).checked = settings[key];
+    else $(id).value = settings[key];
+  }
 }
 
 function readBotForm() {
   const values = {};
-  for (const [key, id] of Object.entries(BOT_FIELDS)) values[key] = $(id).value;
+  for (const [key, id] of Object.entries(BOT_FIELDS)) {
+    values[key] = $(id).type === "checkbox" ? $(id).checked : $(id).value;
+  }
   return values;
+}
+
+function countdown(seconds) {
+  const minutes = Math.round(Math.abs(seconds) / 60);
+  const h = Math.floor(minutes / 60);
+  const text = h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : h ? `${h}h${String(minutes % 60).padStart(2, "0")}` : `${minutes} min`;
+  if (minutes === 0) return "agora";
+  return seconds > 0 ? `em ${text}` : `há ${text}`;
+}
+
+async function refreshNews() {
+  const data = await pywebview.api.get_news();
+  const now = Date.now() / 1000;
+  const box = $("news");
+  box.replaceChildren();
+
+  for (const e of data.events) {
+    const item = el("div", null, "news-item" + (data.active && data.active.time === e.time && data.active.title === e.title ? " active" : ""));
+    const top = el("div", null, "news-top");
+    const left = el("span");
+    left.append(el("span", null, "impact " + e.impact), `${e.label}  ${e.country}`);
+    top.append(left, el("span", countdown(e.time - now)));
+    item.append(top, el("div", e.title, "news-title"));
+    if (e.forecast || e.previous) {
+      item.appendChild(el("div", `Previsão ${e.forecast || "-"}  |  Anterior ${e.previous || "-"}`, "hint"));
+    }
+    box.appendChild(item);
+  }
+  if (!data.events.length) box.appendChild(el("div", "Nenhuma notícia relevante nesta semana", "muted"));
+  $("news-info").textContent = data.fetched
+    ? `Fonte: ForexFactory, atualizado em ${data.fetched}`
+    : "Calendário indisponível no momento";
+
+  const alert = $("news-alert");
+  if (data.active) {
+    const when = countdown(data.active.time - now);
+    alert.textContent = (data.filter ? "Compras do robô pausadas: " : "Notícia: ") + `${data.active.country} ${data.active.title} (${when})`;
+    alert.classList.add("show");
+  } else {
+    alert.classList.remove("show");
+  }
 }
 
 function showBotMessage(text, ok) {
@@ -334,7 +385,10 @@ function setupBot(settings) {
     $("bot-start").disabled = false;
     showBotMessage(result.error || result.ok, !result.error);
     const data = await refreshBot();
-    if (!result.error) applySettingsToChart(data.settings);
+    if (!result.error) {
+      applySettingsToChart(data.settings);
+      refreshNews();
+    }
   };
 
   $("bot-stop").onclick = async () => {
@@ -390,9 +444,11 @@ async function init() {
   setupBot(bot.settings);
   await refreshChart(true);
   await refreshAccount();
+  await refreshNews();
   setInterval(() => refreshChart(false), 3000);
   setInterval(refreshAccount, 10000);
   setInterval(refreshBot, 3000);
+  setInterval(refreshNews, 30000);
 }
 
 window.addEventListener("pywebviewready", init);

@@ -16,6 +16,7 @@ painel fica salvo em `settings.json` e tem prioridade.
 | `backtest.py` | Testa a estratégia no histórico real da Binance (não precisa de chave) |
 | `bot.py` | Robô ao vivo: compra e vende na testnet |
 | `binance_client.py` | Conversa com a API da Binance |
+| `news.py` | Calendário de notícias econômicas (ForexFactory) |
 | `app.py` e `ui/` | Painel visual: gráfico ao vivo, saldo, posição e operações |
 | `build.ps1` | Gera o `RoboTrader.exe` |
 
@@ -95,6 +96,19 @@ registra o resultado. Num sinal de venda, ele cancela os stops e vende a mercado
 aparecem em "Ordens abertas" marcados como "robô" e sem botões, para não confundir a posição dele.
 
 Fechar o painel desliga o robô. Os stops que já estão na Binance continuam valendo.
+
+### Filtro de notícias
+
+Com "Pausar perto de notícias" marcado, o robô ignora sinais de compra entre X minutos antes e X
+minutos depois de cada notícia relevante (por padrão, 30 e 30, impacto alto, moeda USD). Vendas e
+stops continuam funcionando normalmente. O card "Próximas notícias" mostra a lista com contagem
+regressiva, e um aviso amarelo aparece no topo durante a janela de pausa.
+
+O calendário vem do arquivo público do ForexFactory (`nfs.faireconomy.media`), baixado no máximo a
+cada 4 horas e guardado em `news_cache.json`. O ForexFactory bloqueia quem consulta com frequência
+maior. Os horários já aparecem no fuso do computador. O arquivo não traz o resultado real da
+notícia, só a previsão e o valor anterior. Se o calendário estiver indisponível, o robô segue sem o
+filtro e avisa no registro.
 
 ### Ordem manual
 
