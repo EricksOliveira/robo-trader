@@ -255,6 +255,7 @@ class InstanceLock:
 class Bot:
     def __init__(self, client: BinanceClient, market: Market, settings: dict, stop_event: threading.Event | None = None):
         self.client = client
+        self.data = market_data_client(client)
         self.market = market
         self.s = settings
         self.stop_event = stop_event or threading.Event()
@@ -303,7 +304,7 @@ class Bot:
         state = load_state()
         self._check_protection(state)
 
-        df = self.client.klines(config.SYMBOL, s["interval"], limit=candles_needed(s))
+        df = self.data.klines(config.SYMBOL, s["interval"], limit=candles_needed(s))
         df = df[df["close_time"] < self.client.now_ms()].reset_index(drop=True)
         buy_rule, sell_rule = rules_for(df, s)
         n = float(atr(df).iloc[-1])
@@ -380,7 +381,7 @@ class Bot:
         if s["atr_stop"] != "none" and not n > 0:
             log("Sinal de compra ignorado: ATR ainda não calculado.")
             return
-        price = float(self.client.klines(config.SYMBOL, "1m", limit=1)["close"].iloc[-1])
+        price = float(self.data.klines(config.SYMBOL, "1m", limit=1)["close"].iloc[-1])
         spend = self._spend(n, price)
         if spend < market.min_notional:
             log(f"Sinal de compra ignorado: valor da compra ({spend:.2f}) abaixo do mínimo da corretora.")
@@ -535,6 +536,15 @@ def make_client() -> BinanceClient:
     )
     client.sync_time()
     return client
+
+
+def market_data_client(client: BinanceClient) -> BinanceClient:
+    # the testnet keeps only a few weeks of candles, too few for long indicators like the 200-period average
+    if not config.USE_TESTNET:
+        return client
+    data = BinanceClient(testnet=False)
+    data.time_offset_ms = client.time_offset_ms
+    return data
 
 
 def check(client: BinanceClient, market: Market) -> None:

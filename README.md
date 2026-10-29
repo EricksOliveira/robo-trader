@@ -90,6 +90,10 @@ também vai bem em outra moeda e em outro tempo gráfico.
    python bot.py
    ```
 
+Na testnet, os sinais e o gráfico usam os candles da Binance real (públicos, sem chave), e só as
+ordens e o saldo ficam na testnet. A testnet guarda poucas semanas de candles, o que não basta para
+a média de 200 em 4h ou 1d. Os preços das duas ficam muito próximos.
+
 Só um robô roda por vez: se ele já estiver ligado no painel, o `bot.py` se recusa a iniciar, e
 vice-versa.
 

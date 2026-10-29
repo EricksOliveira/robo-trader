@@ -24,6 +24,7 @@ from bot import (
     load_settings,
     load_state,
     make_client,
+    market_data_client,
     save_settings,
 )
 from strategy import BREAKOUTS, TREND_PERIOD
@@ -109,6 +110,7 @@ class Api:
     def __init__(self):
         self._client = None
         self._market = None
+        self._data = None
         self._lock = threading.Lock()
         self._history = []
         self._bot_thread = None
@@ -120,6 +122,7 @@ class Api:
             if self._client is None:
                 client = make_client()
                 self._market = Market(client.symbol_info(config.SYMBOL))
+                self._data = market_data_client(client)
                 self._client = client
             return self._client, self._market
 
@@ -211,10 +214,10 @@ class Api:
     def _chart(self, interval: str) -> dict:
         if interval not in INTERVAL_MS:
             raise ValueError(f"Tempo gráfico inválido: {interval}")
-        client, _ = self._connect()
+        self._connect()
         offset = utc_offset_seconds()
         settings = load_settings()
-        df = client.klines(config.SYMBOL, interval, limit=1000 if settings["trend_filter"] else 500)
+        df = self._data.klines(config.SYMBOL, interval, limit=1000 if settings["trend_filter"] else 500)
 
         candles = [
             {"time": int(r.open_time) // 1000 + offset, "open": r.open, "high": r.high, "low": r.low, "close": r.close}

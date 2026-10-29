@@ -482,6 +482,7 @@ async function init() {
   $("symbol").textContent = cfg.symbol;
   $("mode").textContent = cfg.testnet ? "TESTNET" : "REAL";
   $("mode").classList.add(cfg.testnet ? "testnet" : "real");
+  if (cfg.testnet) $("price-label").textContent = "Preço na testnet";
 
   buildIntervals();
   setupTabs();
