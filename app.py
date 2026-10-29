@@ -8,10 +8,22 @@ import webview
 
 import config
 from binance_client import INTERVAL_MS, BinanceError
-from bot import BASE_DIR, Market, fee_in, load_state, make_client
+from bot import (
+    BASE_DIR,
+    BOT_TAG,
+    INTERVALS,
+    LOCK_FILE,
+    LOG_FILE,
+    Bot,
+    InstanceLock,
+    Market,
+    fee_in,
+    load_settings,
+    load_state,
+    make_client,
+    save_settings,
+)
 from strategy import add_signals
-
-INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"]
 TAKE_PROFIT_TYPES = {"LIMIT", "LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
 STOP_LOSS_TYPES = {"STOP_LOSS", "STOP_LOSS_LIMIT"}
 
@@ -50,6 +62,7 @@ def group_open_orders(orders: list[dict]) -> list[dict]:
             "list_id": o["orderListId"],
             "order_id": o["orderId"],
             "side": o["side"],
+            "bot": o["clientOrderId"].startswith(BOT_TAG + "-"),
             "qty": float(o["origQty"]) - float(o["executedQty"]),
             "take_profit": None,
             "stop_loss": None,
@@ -76,6 +89,9 @@ class Api:
         self._market = None
         self._lock = threading.Lock()
         self._history = []
+        self._bot_thread = None
+        self._bot_stop = threading.Event()
+        self._bot_lock = InstanceLock(LOCK_FILE)
 
     def _connect(self):
         with self._lock:
@@ -95,15 +111,64 @@ class Api:
             return {"error": str(e)}
 
     def get_config(self) -> dict:
+        settings = load_settings()
         return {
             "symbol": config.SYMBOL,
-            "interval": config.INTERVAL,
+            "interval": settings["interval"],
             "intervals": INTERVALS,
-            "fast": config.FAST_SMA,
-            "slow": config.SLOW_SMA,
+            "fast": settings["fast_sma"],
+            "slow": settings["slow_sma"],
             "testnet": config.USE_TESTNET,
-            "trade_usdt": config.TRADE_USDT,
+            "trade_usdt": settings["trade_usdt"],
         }
+
+    def get_bot(self) -> dict:
+        lines = []
+        if LOG_FILE.exists():
+            with LOG_FILE.open(encoding="utf-8", errors="replace") as f:
+                lines = [line.rstrip("\n") for line in f.readlines()[-40:]]
+        running = self._bot_thread is not None and self._bot_thread.is_alive()
+        return {
+            "running": running,
+            "elsewhere": not running and self._bot_lock.held_elsewhere(),
+            "settings": load_settings(),
+            "log": lines,
+        }
+
+    def start_bot(self, values: dict) -> dict:
+        return self._safe(lambda: self._start_bot(values))
+
+    def _start_bot(self, values: dict) -> dict:
+        if self._bot_thread is not None and self._bot_thread.is_alive():
+            raise ValueError("O robô já está ligado")
+        settings = save_settings(values)
+        if not self._bot_lock.acquire():
+            raise ValueError("O robô já está rodando em outra janela. Feche a outra antes.")
+        try:
+            client = make_client()
+            market = Market(client.symbol_info(config.SYMBOL))
+        except Exception:
+            self._bot_lock.release()
+            raise
+
+        self._bot_stop.clear()
+        bot = Bot(client, market, settings, self._bot_stop)
+
+        def run():
+            try:
+                bot.run()
+            finally:
+                self._bot_lock.release()
+
+        self._bot_thread = threading.Thread(target=run, daemon=True)
+        self._bot_thread.start()
+        return {"ok": "Robô ligado"}
+
+    def stop_bot(self) -> dict:
+        self._bot_stop.set()
+        if self._bot_thread is not None:
+            self._bot_thread.join(timeout=20)
+        return {"ok": "Robô desligado"}
 
     def get_chart(self, interval: str) -> dict:
         return self._safe(lambda: self._chart(interval))
@@ -113,7 +178,8 @@ class Api:
             raise ValueError(f"Tempo gráfico inválido: {interval}")
         client, _ = self._connect()
         offset = utc_offset_seconds()
-        df = add_signals(client.klines(config.SYMBOL, interval, limit=500), config.FAST_SMA, config.SLOW_SMA)
+        settings = load_settings()
+        df = add_signals(client.klines(config.SYMBOL, interval, limit=500), settings["fast_sma"], settings["slow_sma"])
 
         candles = [
             {"time": int(r.open_time) // 1000 + offset, "open": r.open, "high": r.high, "low": r.low, "close": r.close}
@@ -249,16 +315,18 @@ class Api:
 
 
 def main() -> None:
+    api = Api()
     webview.create_window(
         "Robô Trader",
         str(BASE_DIR / "ui" / "index.html"),
-        js_api=Api(),
+        js_api=api,
         width=1280,
         height=860,
         min_size=(900, 600),
         background_color="#131722",
     )
     webview.start()
+    api.stop_bot()
 
 
 if __name__ == "__main__":

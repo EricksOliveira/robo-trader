@@ -147,7 +147,52 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .order button { padding: 5px; font-size: 12px; font-weight: 500; background: var(--border); }
 .order button:hover { background: #363a45; }
 
-.trades { flex: 1; min-height: 160px; }
+.field select {
+  width: 110px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font: inherit;
+}
+
+fieldset { border: none; margin: 0; padding: 0; }
+fieldset:disabled input, fieldset:disabled select { opacity: 0.6; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tabs button {
+  flex: 1;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+.tab { display: none; flex-direction: column; gap: 12px; }
+.tab.active { display: flex; }
+
+.bot-status { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot.away { background: #f5c518; }
+
+.log {
+  margin: 0;
+  height: 180px;
+  overflow-y: auto;
+  font: 11px Consolas, monospace;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tag { font-size: 11px; color: #f5c518; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 2px; }
 td { padding: 4px 2px; border-top: 1px solid var(--border); }

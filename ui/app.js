@@ -160,7 +160,9 @@ function renderOrders(data) {
   box.replaceChildren();
   for (const o of data.orders) {
     const item = el("div", null, "order");
-    item.appendChild(row(o.side === "SELL" ? "Venda" : "Compra", `${num(o.qty, 5)} ${data.base}`));
+    const head = row(o.side === "SELL" ? "Venda" : "Compra", `${num(o.qty, 5)} ${data.base}`);
+    if (o.bot) head.firstChild.append(" ", el("span", "robô", "tag"));
+    item.appendChild(head);
     if (o.take_profit != null) {
       const r = row("Stop gain", num(o.take_profit));
       r.lastChild.className = "pos";
@@ -170,6 +172,12 @@ function renderOrders(data) {
       const r = row("Stop loss", num(o.stop_loss));
       r.lastChild.className = "neg";
       item.appendChild(r);
+    }
+
+    if (o.bot) {
+      item.appendChild(el("div", "Controlada pelo robô", "hint"));
+      box.appendChild(item);
+      continue;
     }
 
     const buttons = el("div", null, "buttons");
@@ -220,7 +228,7 @@ function showMessage(text, ok) {
 }
 
 async function runOrder(action) {
-  const buttons = document.querySelectorAll("aside button");
+  const buttons = document.querySelectorAll("#tab-manual button");
   buttons.forEach((b) => (b.disabled = true));
   try {
     const result = await action();
@@ -265,17 +273,103 @@ function setupOrderForm() {
   };
 }
 
+const BOT_FIELDS = {
+  interval: "bot-interval",
+  fast_sma: "bot-fast",
+  slow_sma: "bot-slow",
+  trade_usdt: "bot-amount",
+  max_daily_loss_usdt: "bot-max-loss",
+  stop_loss_pct: "bot-sl",
+  take_profit_pct: "bot-tp",
+};
+
+function fillBotForm(settings) {
+  for (const [key, id] of Object.entries(BOT_FIELDS)) $(id).value = settings[key];
+}
+
+function readBotForm() {
+  const values = {};
+  for (const [key, id] of Object.entries(BOT_FIELDS)) values[key] = $(id).value;
+  return values;
+}
+
+function showBotMessage(text, ok) {
+  $("bot-msg").textContent = text;
+  $("bot-msg").className = "msg " + (ok ? "ok" : "error");
+}
+
+async function refreshBot() {
+  const data = await pywebview.api.get_bot();
+  const busy = data.running || data.elsewhere;
+  $("bot-dot").className = "dot" + (data.running ? " on" : data.elsewhere ? " away" : "");
+  $("bot-state").textContent = data.running ? "Ligado" : data.elsewhere ? "Rodando em outra janela" : "Desligado";
+  $("bot-form").disabled = busy;
+  $("bot-start").style.display = busy ? "none" : "";
+  $("bot-stop").style.display = data.running ? "" : "none";
+
+  const log = $("bot-log");
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = data.log.join("\n");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  return data;
+}
+
+function applySettingsToChart(settings) {
+  cfg.fast = settings.fast_sma;
+  cfg.slow = settings.slow_sma;
+  if (cfg.intervals.includes(settings.interval)) selectInterval(settings.interval);
+  else refreshChart(true);
+}
+
+function setupBot(settings) {
+  const select = $("bot-interval");
+  for (const value of cfg.intervals) select.appendChild(el("option", value));
+  fillBotForm(settings);
+
+  $("bot-start").onclick = async () => {
+    if (!confirmReal("Ligar o robô automático?")) return;
+    $("bot-start").disabled = true;
+    showBotMessage("Ligando...", true);
+    const result = await pywebview.api.start_bot(readBotForm());
+    $("bot-start").disabled = false;
+    showBotMessage(result.error || result.ok, !result.error);
+    const data = await refreshBot();
+    if (!result.error) applySettingsToChart(data.settings);
+  };
+
+  $("bot-stop").onclick = async () => {
+    $("bot-stop").disabled = true;
+    showBotMessage("Desligando...", true);
+    const result = await pywebview.api.stop_bot();
+    $("bot-stop").disabled = false;
+    showBotMessage(result.error || result.ok, !result.error);
+    await refreshBot();
+  };
+}
+
+function setupTabs() {
+  const buttons = document.querySelectorAll(".tabs button");
+  for (const button of buttons) {
+    button.onclick = () => {
+      for (const b of buttons) b.classList.toggle("active", b === button);
+      for (const tab of document.querySelectorAll(".tab")) tab.classList.toggle("active", tab.id === button.dataset.tab);
+    };
+  }
+}
+
+function selectInterval(value) {
+  interval = value;
+  for (const b of $("intervals").children) b.classList.toggle("active", b.textContent === value);
+  lastTime = 0;
+  refreshChart(true);
+}
+
 function buildIntervals() {
   const box = $("intervals");
   for (const value of cfg.intervals) {
     const button = el("button", value);
     button.classList.toggle("active", value === interval);
-    button.onclick = () => {
-      interval = value;
-      for (const b of box.children) b.classList.toggle("active", b === button);
-      lastTime = 0;
-      refreshChart(true);
-    };
+    button.onclick = () => selectInterval(value);
     box.appendChild(button);
   }
 }
@@ -289,12 +383,16 @@ async function init() {
   $("mode").classList.add(cfg.testnet ? "testnet" : "real");
 
   buildIntervals();
+  setupTabs();
   setupOrderForm();
   createChart();
+  const bot = await refreshBot();
+  setupBot(bot.settings);
   await refreshChart(true);
   await refreshAccount();
   setInterval(() => refreshChart(false), 3000);
   setInterval(refreshAccount, 10000);
+  setInterval(refreshBot, 3000);
 }
 
 window.addEventListener("pywebviewready", init);

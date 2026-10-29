@@ -26,6 +26,10 @@ class BinanceError(Exception):
     pass
 
 
+def client_order_id(tag: str, kind: str) -> str:
+    return f"{tag}-{kind}-{int(time.time() * 1000)}"
+
+
 def sign(query: str, secret: str) -> str:
     return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
@@ -122,15 +126,19 @@ class BinanceClient:
         params = {"symbol": symbol, "side": "SELL", "type": "MARKET", "quoteOrderQty": f"{quote_amount:.2f}"}
         return self._request("POST", "/api/v3/order", params, signed=True)
 
-    def stop_loss_sell(self, symbol: str, quantity: str, stop_price: str) -> dict:
+    def stop_loss_sell(self, symbol: str, quantity: str, stop_price: str, tag: str = "") -> dict:
         params = {"symbol": symbol, "side": "SELL", "type": "STOP_LOSS", "quantity": quantity, "stopPrice": stop_price}
+        if tag:
+            params["newClientOrderId"] = client_order_id(tag, "sl")
         return self._request("POST", "/api/v3/order", params, signed=True)
 
-    def take_profit_sell(self, symbol: str, quantity: str, price: str) -> dict:
+    def take_profit_sell(self, symbol: str, quantity: str, price: str, tag: str = "") -> dict:
         params = {"symbol": symbol, "side": "SELL", "type": "LIMIT_MAKER", "quantity": quantity, "price": price}
+        if tag:
+            params["newClientOrderId"] = client_order_id(tag, "tp")
         return self._request("POST", "/api/v3/order", params, signed=True)
 
-    def oco_sell(self, symbol: str, quantity: str, take_profit: str, stop_loss: str) -> dict:
+    def oco_sell(self, symbol: str, quantity: str, take_profit: str, stop_loss: str, tag: str = "") -> dict:
         params = {
             "symbol": symbol,
             "side": "SELL",
@@ -140,7 +148,13 @@ class BinanceClient:
             "belowType": "STOP_LOSS",
             "belowStopPrice": stop_loss,
         }
+        if tag:
+            params["aboveClientOrderId"] = client_order_id(tag, "tp")
+            params["belowClientOrderId"] = client_order_id(tag, "sl")
         return self._request("POST", "/api/v3/orderList/oco", params, signed=True)
+
+    def get_order(self, symbol: str, order_id: int) -> dict:
+        return self._request("GET", "/api/v3/order", {"symbol": symbol, "orderId": order_id}, signed=True)
 
     def open_orders(self, symbol: str) -> list[dict]:
         return self._request("GET", "/api/v3/openOrders", {"symbol": symbol}, signed=True)

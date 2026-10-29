@@ -31,46 +31,94 @@
         <div class="row muted"><span>Preço atual</span><span id="price">-</span></div>
       </div>
 
-      <div class="card">
-        <h2>Ordem manual</h2>
-        <label class="field"><span>Valor (USDT)</span><input id="amount" type="number" min="5" step="1"></label>
-        <label class="field">
-          <span>Stop loss %</span>
-          <input id="sl" type="number" min="0" step="0.1" placeholder="sem">
-        </label>
-        <div id="sl-price" class="hint neg"></div>
-        <label class="field">
-          <span>Stop gain %</span>
-          <input id="tp" type="number" min="0" step="0.1" placeholder="sem">
-        </label>
-        <div id="tp-price" class="hint pos"></div>
-        <div class="buttons">
-          <button id="buy" class="buy">Comprar</button>
-          <button id="sell" class="sell">Vender</button>
+      <nav class="tabs">
+        <button data-tab="tab-bot" class="active">Robô</button>
+        <button data-tab="tab-manual">Manual</button>
+        <button data-tab="tab-history">Histórico</button>
+      </nav>
+
+      <div id="tab-bot" class="tab active">
+        <div class="card">
+          <h2>Robô automático</h2>
+          <div class="bot-status"><span id="bot-dot" class="dot"></span><span id="bot-state">...</span></div>
+          <fieldset id="bot-form">
+            <label class="field">
+              <span>Tempo gráfico</span>
+              <select id="bot-interval"></select>
+            </label>
+            <label class="field"><span>Média rápida</span><input id="bot-fast" type="number" min="2" step="1"></label>
+            <label class="field"><span>Média lenta</span><input id="bot-slow" type="number" min="3" step="1"></label>
+            <label class="field"><span>Valor por compra (USDT)</span><input id="bot-amount" type="number" min="5" step="1"></label>
+            <label class="field">
+              <span>Perda máxima por dia</span>
+              <input id="bot-max-loss" type="number" min="1" step="1">
+            </label>
+            <label class="field">
+              <span>Stop loss %</span>
+              <input id="bot-sl" type="number" min="0" step="0.1" placeholder="0 = sem">
+            </label>
+            <label class="field">
+              <span>Stop gain %</span>
+              <input id="bot-tp" type="number" min="0" step="0.1" placeholder="0 = sem">
+            </label>
+          </fieldset>
+          <div class="buttons">
+            <button id="bot-start" class="buy">Ligar robô</button>
+            <button id="bot-stop" class="sell">Desligar robô</button>
+          </div>
+          <div id="bot-msg" class="msg"></div>
         </div>
-        <div id="order-msg" class="msg"></div>
-        <div class="hint">Os stops valem só para compras e ficam registrados na Binance.</div>
+
+        <div class="card">
+          <h2>Posição do robô</h2>
+          <div id="position" class="muted">Sem compra aberta</div>
+          <div class="row"><span>Resultado do dia</span><b id="day-pnl">-</b></div>
+        </div>
+
+        <div class="card">
+          <h2>Registro do robô</h2>
+          <pre id="bot-log" class="log"></pre>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Ordens abertas</h2>
-        <div id="orders"></div>
-        <div id="no-orders" class="muted">Nenhuma ordem aberta</div>
+      <div id="tab-manual" class="tab">
+        <div class="card">
+          <h2>Ordem manual</h2>
+          <label class="field"><span>Valor (USDT)</span><input id="amount" type="number" min="5" step="1"></label>
+          <label class="field">
+            <span>Stop loss %</span>
+            <input id="sl" type="number" min="0" step="0.1" placeholder="sem">
+          </label>
+          <div id="sl-price" class="hint neg"></div>
+          <label class="field">
+            <span>Stop gain %</span>
+            <input id="tp" type="number" min="0" step="0.1" placeholder="sem">
+          </label>
+          <div id="tp-price" class="hint pos"></div>
+          <div class="buttons">
+            <button id="buy" class="buy">Comprar</button>
+            <button id="sell" class="sell">Vender</button>
+          </div>
+          <div id="order-msg" class="msg"></div>
+          <div class="hint">Os stops valem só para compras e ficam registrados na Binance.</div>
+        </div>
+
+        <div class="card">
+          <h2>Ordens abertas</h2>
+          <div id="orders"></div>
+          <div id="no-orders" class="muted">Nenhuma ordem aberta</div>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Posição do robô</h2>
-        <div id="position" class="muted">Sem compra aberta</div>
-        <div class="row"><span>Resultado do dia</span><b id="day-pnl">-</b></div>
-      </div>
-
-      <div class="card trades">
-        <h2>Histórico na corretora</h2>
-        <table>
-          <thead><tr><th>Data</th><th>Lado</th><th>Preço</th><th>Valor</th></tr></thead>
-          <tbody id="history"></tbody>
-        </table>
-        <div id="no-history" class="muted">Nenhuma operação ainda</div>
+      <div id="tab-history" class="tab">
+        <div class="card">
+          <h2>Histórico na corretora</h2>
+          <table>
+            <thead><tr><th>Data</th><th>Lado</th><th>Preço</th><th>Valor</th></tr></thead>
+            <tbody id="history"></tbody>
+          </table>
+          <div id="no-history" class="muted">Nenhuma operação ainda</div>
+        </div>
       </div>
     </aside>
   </main>

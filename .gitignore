@@ -4,3 +4,5 @@ __pycache__/
 state.json
 trades.csv
 bot.log
+bot.lock
+settings.json
