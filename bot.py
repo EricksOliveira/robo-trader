@@ -33,6 +33,8 @@ NEWS_CACHE_FILE = BASE_DIR / "news_cache.json"
 
 BOT_TAG = "bot"
 INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
+           "DOGEUSDT", "TRXUSDT", "LTCUSDT", "LINKUSDT", "AVAXUSDT", "DOTUSDT"]
 DONE_STATUSES = {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}
 ATR_STOPS = ["none", "fixed", "trailing"]
 SIZINGS = ["fixed", "risk"]
@@ -52,6 +54,7 @@ def today() -> str:
 
 def load_state() -> dict:
     state = {
+        "symbol": config.SYMBOL,
         "position_qty": "0",
         "entry_cost": 0.0,
         "day": today(),
@@ -72,8 +75,16 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+def check_position_symbol(symbol: str) -> None:
+    state = load_state()
+    if Decimal(state["position_qty"]) > 0 and state["symbol"] != symbol:
+        raise ValueError(f"O robô tem uma compra aberta em {state['symbol']}. "
+                         "Deixe ele ligado nesse par até a compra fechar antes de trocar.")
+
+
 def default_settings() -> dict:
     return {
+        "symbol": config.SYMBOL,
         "interval": config.INTERVAL,
         "fast_sma": config.FAST_SMA,
         "slow_sma": config.SLOW_SMA,
@@ -110,6 +121,7 @@ def is_true(value) -> bool:
 def validate_settings(values: dict) -> dict:
     try:
         s = {
+            "symbol": str(values.get("symbol", config.SYMBOL)),
             "interval": str(values["interval"]),
             "fast_sma": int(values["fast_sma"]),
             "slow_sma": int(values["slow_sma"]),
@@ -132,6 +144,8 @@ def validate_settings(values: dict) -> dict:
     except (KeyError, TypeError, ValueError):
         raise ValueError("Preencha todos os campos com números válidos")
 
+    if s["symbol"] not in SYMBOLS:
+        raise ValueError(f"Par inválido: {s['symbol']}")
     if s["interval"] not in INTERVALS:
         raise ValueError(f"Tempo gráfico inválido: {s['interval']}")
     if not 2 <= s["fast_sma"] < s["slow_sma"] <= 200:
@@ -173,20 +187,21 @@ def save_settings(values: dict) -> dict:
     return s
 
 
-def record_trade(side: str, qty: Decimal, quote: float, pnl: float | None) -> None:
+def record_trade(symbol: str, side: str, qty: Decimal, quote: float, pnl: float | None) -> None:
     new_file = not TRADES_FILE.exists()
     with TRADES_FILE.open("a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if new_file:
-            writer.writerow(["data", "lado", "quantidade", "preco_medio", "valor_usdt", "lucro_usdt"])
+            writer.writerow(["data", "lado", "quantidade", "preco_medio", "valor_usdt", "lucro_usdt", "par"])
         price = quote / float(qty) if qty else 0.0
         writer.writerow([
             datetime.now().isoformat(timespec="seconds"),
             side,
             str(qty),
-            f"{price:.2f}",
+            f"{price:.8f}".rstrip("0").rstrip("."),
             f"{quote:.2f}",
             "" if pnl is None else f"{pnl:.2f}",
+            symbol,
         ])
 
 
@@ -202,6 +217,7 @@ class Market:
         self.step = Decimal(filters["LOT_SIZE"]["stepSize"]).normalize()
         self.min_qty = Decimal(filters["LOT_SIZE"]["minQty"])
         self.tick = Decimal(filters["PRICE_FILTER"]["tickSize"]).normalize()
+        self.digits = max(0, -self.tick.as_tuple().exponent)
         notional = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
         self.min_notional = float(notional.get("minNotional", 0))
 
@@ -258,6 +274,7 @@ class Bot:
         self.data = market_data_client(client)
         self.market = market
         self.s = settings
+        self.symbol = settings["symbol"]
         self.stop_event = stop_event or threading.Event()
 
     def run(self) -> None:
@@ -275,7 +292,7 @@ class Bot:
             stops.append(f"stop loss {s['stop_loss_pct']:g}%")
         if s["take_profit_pct"]:
             stops.append(f"stop gain {s['take_profit_pct']:g}%")
-        log(f"Robô iniciado: {config.SYMBOL} {s['interval']}, {name}, {size}" + (", " + " e ".join(stops) if stops else ""))
+        log(f"Robô iniciado: {self.symbol} {s['interval']}, {name}, {size}" + (", " + " e ".join(stops) if stops else ""))
         if s["news_filter"]:
             events = self._news_events()
             if events is None:
@@ -304,7 +321,7 @@ class Bot:
         state = load_state()
         self._check_protection(state)
 
-        df = self.data.klines(config.SYMBOL, s["interval"], limit=candles_needed(s))
+        df = self.data.klines(self.symbol, s["interval"], limit=candles_needed(s))
         df = df[df["close_time"] < self.client.now_ms()].reset_index(drop=True)
         buy_rule, sell_rule = rules_for(df, s)
         n = float(atr(df).iloc[-1])
@@ -335,19 +352,19 @@ class Bot:
             self.sell(state)
 
     def _describe(self, df, n: float, holding: bool, state: dict) -> str:
-        s = self.s
+        s, d = self.s, self.market.digits
         closes = df["close"]
-        parts = [f"Preço {closes.iloc[-1]:.2f}"]
+        parts = [f"Preço {closes.iloc[-1]:.{d}f}"]
         if s["strategy"] in BREAKOUTS:
             entry, exit = BREAKOUTS[s["strategy"]]
-            parts.append(f"máx{entry} {df['high'].iloc[-entry - 1:-1].max():.2f}")
-            parts.append(f"mín{exit} {df['low'].iloc[-exit - 1:-1].min():.2f}")
+            parts.append(f"máx{entry} {df['high'].iloc[-entry - 1:-1].max():.{d}f}")
+            parts.append(f"mín{exit} {df['low'].iloc[-exit - 1:-1].min():.{d}f}")
         else:
-            parts.append(f"SMA{s['fast_sma']} {closes.iloc[-s['fast_sma']:].mean():.2f}")
-            parts.append(f"SMA{s['slow_sma']} {closes.iloc[-s['slow_sma']:].mean():.2f}")
+            parts.append(f"SMA{s['fast_sma']} {closes.iloc[-s['fast_sma']:].mean():.{d}f}")
+            parts.append(f"SMA{s['slow_sma']} {closes.iloc[-s['slow_sma']:].mean():.{d}f}")
         if s["trend_filter"]:
-            parts.append(f"MM200 {closes.iloc[-TREND_PERIOD:].mean():.2f}")
-        parts.append(f"ATR {n:.2f}")
+            parts.append(f"MM200 {closes.iloc[-TREND_PERIOD:].mean():.{d}f}")
+        parts.append(f"ATR {n:.{d}f}")
         parts.append("comprado" if holding else "fora")
         parts.append(f"resultado do dia {state['day_pnl']:+.2f}")
         return " | ".join(parts)
@@ -381,22 +398,23 @@ class Bot:
         if s["atr_stop"] != "none" and not n > 0:
             log("Sinal de compra ignorado: ATR ainda não calculado.")
             return
-        price = float(self.data.klines(config.SYMBOL, "1m", limit=1)["close"].iloc[-1])
+        price = float(self.data.klines(self.symbol, "1m", limit=1)["close"].iloc[-1])
         spend = self._spend(n, price)
         if spend < market.min_notional:
             log(f"Sinal de compra ignorado: valor da compra ({spend:.2f}) abaixo do mínimo da corretora.")
             return
 
-        order = self.client.market_buy(config.SYMBOL, spend)
+        order = self.client.market_buy(self.symbol, spend)
         qty = Decimal(order["executedQty"]) - fee_in(order, market.base)
         cost = float(order["cummulativeQuoteQty"]) + float(fee_in(order, market.quote))
         avg = cost / float(qty)
+        state["symbol"] = self.symbol
         state["position_qty"] = str(qty)
         state["entry_cost"] = cost
         state["protection"] = None
         state["peak"] = avg
         save_state(state)
-        record_trade("COMPRA", qty, cost, None)
+        record_trade(self.symbol, "COMPRA", qty, cost, None)
         log(f"COMPRA: {qty} {market.base} por {cost:.2f} {market.quote}")
 
         sl_price = None
@@ -415,15 +433,15 @@ class Bot:
     def _place_protection(self, qty: Decimal, sl_price: str | None, tp_price: str | None) -> dict:
         quantity = format(qty, "f")
         if sl_price and tp_price:
-            r = self.client.oco_sell(config.SYMBOL, quantity, tp_price, sl_price, tag=BOT_TAG)
+            r = self.client.oco_sell(self.symbol, quantity, tp_price, sl_price, tag=BOT_TAG)
             order_ids, list_id = [o["orderId"] for o in r["orders"]], r["orderListId"]
             log(f"Stops criados: stop loss {sl_price}, stop gain {tp_price}")
         elif sl_price:
-            r = self.client.stop_loss_sell(config.SYMBOL, quantity, sl_price, tag=BOT_TAG)
+            r = self.client.stop_loss_sell(self.symbol, quantity, sl_price, tag=BOT_TAG)
             order_ids, list_id = [r["orderId"]], -1
             log(f"Stop criado: stop loss {sl_price}")
         else:
-            r = self.client.take_profit_sell(config.SYMBOL, quantity, tp_price, tag=BOT_TAG)
+            r = self.client.take_profit_sell(self.symbol, quantity, tp_price, tag=BOT_TAG)
             order_ids, list_id = [r["orderId"]], -1
             log(f"Stop criado: stop gain {tp_price}")
         return {
@@ -444,7 +462,7 @@ class Bot:
             save_state(state)
             return False
         if new_sl >= close:
-            log(f"Stop móvel ({new_sl:.2f}) acima do fechamento, vendendo agora.")
+            log(f"Stop móvel ({new_sl:.{self.market.digits}f}) acima do fechamento, vendendo agora.")
             self.sell(state)
             return True
 
@@ -456,7 +474,7 @@ class Bot:
             state["protection"] = self._place_protection(
                 qty, self.market.round_price(new_sl), self.market.round_price(tp) if tp else None
             )
-            log(f"Stop móvel subiu para {new_sl:.2f}")
+            log(f"Stop móvel subiu para {new_sl:.{self.market.digits}f}")
         except BinanceError as e:
             log(f"Não foi possível subir o stop móvel, a posição ficou sem stop: {e}")
         save_state(state)
@@ -467,7 +485,7 @@ class Bot:
         if not protection or Decimal(state["position_qty"]) <= 0:
             return False
 
-        orders = [self.client.get_order(config.SYMBOL, oid) for oid in protection["order_ids"]]
+        orders = [self.client.get_order(self.symbol, oid) for oid in protection["order_ids"]]
         filled = [o for o in orders if o["status"] == "FILLED"]
         if filled:
             o = filled[0]
@@ -476,7 +494,7 @@ class Bot:
             proceeds = float(o["cummulativeQuoteQty"])
             pnl = proceeds - state["entry_cost"]
             state["day_pnl"] += pnl
-            record_trade(kind, qty, proceeds, pnl)
+            record_trade(self.symbol, kind, qty, proceeds, pnl)
             log(f"{kind} executado: {qty} {self.market.base} por {proceeds:.2f} {self.market.quote} "
                 f"(resultado {pnl:+.2f})")
             self._clear_position(state)
@@ -494,9 +512,9 @@ class Bot:
             return
         try:
             if protection["list_id"] != -1:
-                self.client.cancel_order_list(config.SYMBOL, protection["list_id"])
+                self.client.cancel_order_list(self.symbol, protection["list_id"])
             else:
-                self.client.cancel_order(config.SYMBOL, protection["order_ids"][0])
+                self.client.cancel_order(self.symbol, protection["order_ids"][0])
         except BinanceError:
             pass
         state["protection"] = None
@@ -511,11 +529,11 @@ class Bot:
         if qty < market.min_qty:
             log(f"Quantidade {qty} abaixo do mínimo para vender. Posição zerada no registro.")
         else:
-            order = self.client.market_sell(config.SYMBOL, format(qty, "f"))
+            order = self.client.market_sell(self.symbol, format(qty, "f"))
             proceeds = float(order["cummulativeQuoteQty"]) - float(fee_in(order, market.quote))
             pnl = proceeds - state["entry_cost"]
             state["day_pnl"] += pnl
-            record_trade("VENDA", qty, proceeds, pnl)
+            record_trade(self.symbol, "VENDA", qty, proceeds, pnl)
             log(f"VENDA: {qty} {market.base} por {proceeds:.2f} {market.quote} (resultado {pnl:+.2f})")
         self._clear_position(state)
 
@@ -565,22 +583,27 @@ def main() -> None:
         if input('Digite "DINHEIRO REAL" para continuar: ').strip() != "DINHEIRO REAL":
             sys.exit("Cancelado.")
 
+    settings = load_settings()
     try:
         client = make_client()
-        market = Market(client.symbol_info(config.SYMBOL))
+        market = Market(client.symbol_info(settings["symbol"]))
         check(client, market)
     except (BinanceError, requests.RequestException) as e:
         sys.exit(f"Falha ao conectar: {e}")
 
     if args.check:
         return
+    try:
+        check_position_symbol(settings["symbol"])
+    except ValueError as e:
+        sys.exit(str(e))
 
     lock = InstanceLock(LOCK_FILE)
     if not lock.acquire():
         sys.exit("O robô já está rodando (no painel ou em outra janela).")
     print("Ctrl+C para parar.")
     try:
-        Bot(client, market, load_settings()).run()
+        Bot(client, market, settings).run()
     except KeyboardInterrupt:
         log("Robô parado.")
     finally:

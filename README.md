@@ -19,7 +19,7 @@ Os valores padrão ficam em `config.py`. O que for mudado pelo painel fica salvo
 
 | Arquivo | O que faz |
 |---|---|
-| `config.py` | Par, testnet ou real, e os valores padrão do robô |
+| `config.py` | Testnet ou real, e os valores padrão do robô (inclusive o par) |
 | `strategy.py` | Calcula as médias e marca os sinais de compra e venda |
 | `backtest.py` | Testa a estratégia no histórico real da Binance (não precisa de chave) |
 | `compare.py` | Compara várias estratégias (médias, Tartarugas, MM200, stops de ATR) |
@@ -103,7 +103,7 @@ operações mais rápido nos testes, use 1m.
 Registros:
 
 - `bot.log`: tudo o que o robô fez;
-- `trades.csv`: cada compra, venda e stop executado, com o resultado (abre no Excel);
+- `trades.csv`: cada compra, venda e stop executado, com o resultado e o par (abre no Excel);
 - `state.json`: posição atual e stops do robô. Apague só com o robô parado e sem compra aberta.
 
 O limite de perda diária conta apenas vendas já feitas no dia (horário UTC). Ao atingir o limite,
@@ -122,7 +122,12 @@ direita há três abas: Robô, Manual e Histórico.
 ### Aba Robô
 
 Liga e desliga o robô e mostra a posição dele e o registro (`bot.log`) ao vivo. As configurações
-só podem ser mudadas com o robô desligado e são salvas ao ligar. O gráfico mostra as linhas da
+só podem ser mudadas com o robô desligado e são salvas ao ligar.
+
+O campo **Par** escolhe a moeda (BTC, ETH, SOL, DOGE e outras, sempre contra USDT) e é salvo na
+hora: o gráfico, o saldo, as ordens abertas, o histórico e a ordem manual passam a ser desse par.
+Ele não pode ser trocado enquanto o robô tiver uma compra aberta em outro par: deixe o robô ligado
+nesse par até a compra fechar. O robô opera um par por vez. O gráfico mostra as linhas da
 estratégia salva: as duas médias, ou a máxima e a mínima das Tartarugas, e a MM200 quando o filtro
 está ligado.
 
@@ -143,6 +148,10 @@ cancela os stops e vende a mercado. Os stops do robô aparecem em "Ordens aberta
 "robô" e sem botões, para não confundir a posição dele.
 
 Fechar o painel desliga o robô. Os stops que já estão na Binance continuam valendo.
+
+O card **Resultados do robô** soma, a partir do `trades.csv`, os ganhos, as perdas e o total das
+vendas e stops do robô já fechados (com as taxas descontadas), de hoje, dos últimos 7 ou 30 dias ou
+de tudo. Soma todos os pares, em USDT. Compras manuais e a compra ainda aberta não entram.
 
 ### Filtro de notícias
 

@@ -105,6 +105,9 @@ aside {
 
 #position { margin-bottom: 6px; }
 
+.periods { margin-bottom: 8px; }
+.row.total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; font-weight: 600; }
+
 .field { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; }
 .field input {
   width: 110px;

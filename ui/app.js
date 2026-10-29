@@ -7,12 +7,20 @@ let candles;
 let lineSeries = [];
 let lastTime = 0;
 let lastPrice = 0;
+let priceDigits = 2;
+let results = null;
+let resultPeriod = "today";
+let priceFormat = { type: "price", precision: 2, minMove: 0.01 };
 let last = { candle: null, values: [] };
 
 const $ = (id) => document.getElementById(id);
 
 function num(value, digits = 2) {
   return Number(value).toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function price(value) {
+  return num(value, priceDigits);
 }
 
 function signed(el, value) {
@@ -67,7 +75,7 @@ function createChart() {
 function setLines(lines) {
   for (const l of lineSeries) chart.removeSeries(l.series);
   lineSeries = lines.map((l) => {
-    const series = chart.addLineSeries({ color: l.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const series = chart.addLineSeries({ color: l.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, priceFormat });
     series.setData(l.data);
     return { name: l.name, color: l.color, series };
   });
@@ -87,10 +95,10 @@ function renderLegend(candle, values) {
   };
   if (candle) {
     const color = candle.close >= candle.open ? COLORS.up : COLORS.down;
-    add(`Abe ${num(candle.open)}  Máx ${num(candle.high)}  Mín ${num(candle.low)}  Fec ${num(candle.close)}`, color);
+    add(`Abe ${price(candle.open)}  Máx ${price(candle.high)}  Mín ${price(candle.low)}  Fec ${price(candle.close)}`, color);
   }
   for (const v of values) {
-    if (v.value != null) add(`${v.name}: ${num(v.value)}`, v.color);
+    if (v.value != null) add(`${v.name}: ${price(v.value)}`, v.color);
   }
 }
 
@@ -105,9 +113,12 @@ async function refreshChart(reset) {
   const data = await pywebview.api.get_chart(requested);
   if (requested !== interval) return;
   if (data.error) return setStatus("Erro no gráfico: " + data.error, true);
-  if (!data.candles.length) return;
+  if (data.symbol !== cfg.symbol || !data.candles.length) return;
 
   if (reset || !sameLines(data.lines)) {
+    priceDigits = data.digits;
+    priceFormat = { type: "price", precision: data.digits, minMove: data.tick };
+    candles.applyOptions({ priceFormat });
     candles.setData(data.candles);
     setLines(data.lines);
     if (reset) chart.timeScale().scrollToRealTime();
@@ -130,6 +141,8 @@ async function refreshChart(reset) {
 async function refreshAccount() {
   const data = await pywebview.api.get_account();
   if (data.error) return setStatus("Erro na conta: " + data.error, true);
+  if (data.symbol !== cfg.symbol) return;
+  priceDigits = data.digits;
 
   lastPrice = data.price;
   $("quote-name").textContent = data.quote;
@@ -137,8 +150,7 @@ async function refreshAccount() {
   $("quote-free").textContent = num(data.quote_balance.free);
   $("base-free").textContent = num(data.base_balance.free, 8);
   $("locked").textContent = `${num(data.base_balance.locked, 8)} ${data.base}`;
-  $("price").textContent = num(data.price);
-  signed($("day-pnl"), data.day_pnl);
+  $("price").textContent = price(data.price);
 
   renderPosition(data);
   renderOrders(data);
@@ -159,7 +171,7 @@ function renderPosition(data) {
   const p = data.position;
   position.append(
     row("Quantidade", `${num(p.qty, 8)} ${data.base}`),
-    row("Preço de compra", num(p.entry_price)),
+    row("Preço de compra", price(p.entry_price)),
     row("Valor investido", `${num(p.entry_cost)} ${data.quote}`),
   );
   const pnl = row("Resultado aberto", "");
@@ -176,12 +188,12 @@ function renderOrders(data) {
     if (o.bot) head.firstChild.append(" ", el("span", "robô", "tag"));
     item.appendChild(head);
     if (o.take_profit != null) {
-      const r = row("Stop gain", num(o.take_profit));
+      const r = row("Stop gain", price(o.take_profit));
       r.lastChild.className = "pos";
       item.appendChild(r);
     }
     if (o.stop_loss != null) {
-      const r = row("Stop loss", num(o.stop_loss));
+      const r = row("Stop loss", price(o.stop_loss));
       r.lastChild.className = "neg";
       item.appendChild(r);
     }
@@ -219,7 +231,7 @@ function renderHistory(data) {
     tr.append(
       el("td", h.label),
       el("td", h.buy ? "Compra" : "Venda", h.buy ? "pos" : "neg"),
-      el("td", num(h.price)),
+      el("td", price(h.price)),
       el("td", num(h.quote)),
     );
     body.appendChild(tr);
@@ -230,8 +242,8 @@ function renderHistory(data) {
 function updateStopHints() {
   const sl = parseFloat($("sl").value);
   const tp = parseFloat($("tp").value);
-  $("sl-price").textContent = sl > 0 && lastPrice ? `vende se cair a ~${num(lastPrice * (1 - sl / 100))}` : "";
-  $("tp-price").textContent = tp > 0 && lastPrice ? `vende se subir a ~${num(lastPrice * (1 + tp / 100))}` : "";
+  $("sl-price").textContent = sl > 0 && lastPrice ? `vende se cair a ~${price(lastPrice * (1 - sl / 100))}` : "";
+  $("tp-price").textContent = tp > 0 && lastPrice ? `vende se subir a ~${price(lastPrice * (1 + tp / 100))}` : "";
 }
 
 function showMessage(text, ok) {
@@ -286,6 +298,7 @@ function setupOrderForm() {
 }
 
 const BOT_FIELDS = {
+  symbol: "bot-symbol",
   interval: "bot-interval",
   strategy: "bot-strategy",
   fast_sma: "bot-fast",
@@ -388,6 +401,28 @@ async function refreshNews() {
   }
 }
 
+function renderResults() {
+  if (!results) return;
+  const r = results[resultPeriod];
+  $("res-gain").textContent = (r.gain > 0 ? "+" : "") + num(r.gain);
+  $("res-gain").className = r.gain > 0 ? "pos" : "";
+  $("res-loss").textContent = num(r.loss);
+  $("res-loss").className = r.loss < 0 ? "neg" : "";
+  signed($("res-total"), r.gain + r.loss);
+  $("res-count").textContent = r.count ? `${r.count} (${r.wins} com lucro)` : "nenhuma";
+}
+
+function setupResults() {
+  const buttons = $("result-periods").children;
+  for (const button of buttons) {
+    button.onclick = () => {
+      resultPeriod = button.dataset.period;
+      for (const b of buttons) b.classList.toggle("active", b === button);
+      renderResults();
+    };
+  }
+}
+
 function showBotMessage(text, ok) {
   $("bot-msg").textContent = text;
   $("bot-msg").className = "msg " + (ok ? "ok" : "error");
@@ -406,6 +441,8 @@ async function refreshBot() {
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
   log.textContent = data.log.join("\n");
   if (atBottom) log.scrollTop = log.scrollHeight;
+  results = data.results;
+  renderResults();
   return data;
 }
 
@@ -414,10 +451,29 @@ function applySettingsToChart(settings) {
   else refreshChart(true);
 }
 
+function showSymbol() {
+  $("symbol").textContent = cfg.symbol;
+  $("bot-symbol").value = cfg.symbol;
+}
+
+async function changeSymbol() {
+  const symbol = $("bot-symbol").value;
+  if (symbol === cfg.symbol) return;
+  const result = await pywebview.api.set_symbol(symbol);
+  showBotMessage(result.error || result.ok, !result.error);
+  if (!result.error) cfg.symbol = symbol;
+  showSymbol();
+  if (result.error) return;
+  selectInterval(interval);
+  await refreshAccount();
+}
+
 function setupBot(settings) {
   const select = $("bot-interval");
   for (const value of cfg.intervals) select.appendChild(el("option", value));
+  for (const value of cfg.symbols) $("bot-symbol").appendChild(el("option", value));
   fillBotForm(settings);
+  $("bot-symbol").onchange = changeSymbol;
   for (const id of ["bot-strategy", "bot-sizing", "bot-atr-stop"]) $(id).onchange = updateBotFormVisibility;
   $("bot-preset").onclick = () => {
     fillBotForm(RECOMMENDED);
@@ -479,7 +535,6 @@ async function init() {
   cfg = await pywebview.api.get_config();
   interval = cfg.interval;
 
-  $("symbol").textContent = cfg.symbol;
   $("mode").textContent = cfg.testnet ? "TESTNET" : "REAL";
   $("mode").classList.add(cfg.testnet ? "testnet" : "real");
   if (cfg.testnet) $("price-label").textContent = "Preço na testnet";
@@ -487,9 +542,11 @@ async function init() {
   buildIntervals();
   setupTabs();
   setupOrderForm();
+  setupResults();
   createChart();
   const bot = await refreshBot();
   setupBot(bot.settings);
+  showSymbol();
   await refreshChart(true);
   await refreshAccount();
   await refreshNews();

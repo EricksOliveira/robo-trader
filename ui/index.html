@@ -45,6 +45,10 @@
           <fieldset id="bot-form">
             <button id="bot-preset" type="button" class="link">Usar configuração recomendada</button>
             <label class="field">
+              <span>Par</span>
+              <select id="bot-symbol"></select>
+            </label>
+            <label class="field">
               <span>Tempo gráfico</span>
               <select id="bot-interval"></select>
             </label>
@@ -144,7 +148,21 @@
         <div class="card">
           <h2>Posição do robô</h2>
           <div id="position" class="muted">Sem compra aberta</div>
-          <div class="row"><span>Resultado do dia</span><b id="day-pnl">-</b></div>
+        </div>
+
+        <div class="card">
+          <h2>Resultados do robô</h2>
+          <div id="result-periods" class="intervals periods">
+            <button data-period="today" class="active">Hoje</button>
+            <button data-period="7d">7 dias</button>
+            <button data-period="30d">30 dias</button>
+            <button data-period="all">Tudo</button>
+          </div>
+          <div class="row"><span>Ganhos</span><b id="res-gain">-</b></div>
+          <div class="row"><span>Perdas</span><b id="res-loss">-</b></div>
+          <div class="row total"><span>Total</span><b id="res-total">-</b></div>
+          <div class="row muted"><span>Vendas</span><span id="res-count">-</span></div>
+          <div class="hint">Vendas e stops do robô já fechados, em USDT, com as taxas descontadas</div>
         </div>
 
         <div class="card">
