@@ -26,7 +26,8 @@ from bot import (
     make_client,
     save_settings,
 )
-from strategy import add_signals
+from strategy import BREAKOUTS, TREND_PERIOD
+
 TAKE_PROFIT_TYPES = {"LIMIT", "LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
 STOP_LOSS_TYPES = {"STOP_LOSS", "STOP_LOSS_LIMIT"}
 
@@ -35,12 +36,30 @@ def utc_offset_seconds() -> int:
     return int(datetime.now().astimezone().utcoffset().total_seconds())
 
 
-def line(df, column: str, offset: int) -> list[dict]:
+def line(df, values, offset: int) -> list[dict]:
     return [
         {"time": int(t) // 1000 + offset, "value": round(v, 2)}
-        for t, v in zip(df["open_time"], df[column])
+        for t, v in zip(df["open_time"], values)
         if not math.isnan(v)
     ]
+
+
+def indicator_lines(df, s: dict) -> list[tuple[str, object, str]]:
+    close = df["close"]
+    if s["strategy"] in BREAKOUTS:
+        entry, exit = BREAKOUTS[s["strategy"]]
+        lines = [
+            (f"Máx {entry}", df["high"].rolling(entry).max().shift(1), "#4dd0e1"),
+            (f"Mín {exit}", df["low"].rolling(exit).min().shift(1), "#ff9800"),
+        ]
+    else:
+        lines = [
+            (f"SMA {s['fast_sma']}", close.rolling(s["fast_sma"]).mean(), "#f5c518"),
+            (f"SMA {s['slow_sma']}", close.rolling(s["slow_sma"]).mean(), "#2962ff"),
+        ]
+    if s["trend_filter"]:
+        lines.append((f"MM{TREND_PERIOD}", close.rolling(TREND_PERIOD).mean(), "#ce93d8"))
+    return lines
 
 
 def group_fills(fills: list[dict]) -> list[dict]:
@@ -119,8 +138,6 @@ class Api:
             "symbol": config.SYMBOL,
             "interval": settings["interval"],
             "intervals": INTERVALS,
-            "fast": settings["fast_sma"],
-            "slow": settings["slow_sma"],
             "testnet": config.USE_TESTNET,
             "trade_usdt": settings["trade_usdt"],
         }
@@ -197,7 +214,7 @@ class Api:
         client, _ = self._connect()
         offset = utc_offset_seconds()
         settings = load_settings()
-        df = add_signals(client.klines(config.SYMBOL, interval, limit=500), settings["fast_sma"], settings["slow_sma"])
+        df = client.klines(config.SYMBOL, interval, limit=1000 if settings["trend_filter"] else 500)
 
         candles = [
             {"time": int(r.open_time) // 1000 + offset, "open": r.open, "high": r.high, "low": r.low, "close": r.close}
@@ -222,8 +239,10 @@ class Api:
 
         return {
             "candles": candles,
-            "fast": line(df, "sma_fast", offset),
-            "slow": line(df, "sma_slow", offset),
+            "lines": [
+                {"name": name, "color": color, "data": line(df, values, offset)}
+                for name, values, color in indicator_lines(df, settings)
+            ],
             "markers": markers,
         }
 

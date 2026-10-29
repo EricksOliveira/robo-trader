@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 import config
 import news
 from binance_client import INTERVAL_MS, BinanceClient, BinanceError
-from strategy import BUY, SELL, add_signals
+from strategy import BREAKOUTS, STRATEGIES, TREND_PERIOD, atr, candles_needed, rules_for
 
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
@@ -34,6 +34,9 @@ NEWS_CACHE_FILE = BASE_DIR / "news_cache.json"
 BOT_TAG = "bot"
 INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 DONE_STATUSES = {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}
+ATR_STOPS = ["none", "fixed", "trailing"]
+SIZINGS = ["fixed", "risk"]
+STRATEGY_NAMES = {"sma": "Médias", "turtle_20_10": "Tartarugas 20/10", "turtle_55_20": "Tartarugas 55/20"}
 
 
 def log(message: str) -> None:
@@ -55,6 +58,7 @@ def load_state() -> dict:
         "day_pnl": 0.0,
         "last_candle": 0,
         "protection": None,
+        "peak": None,
     }
     if STATE_FILE.exists():
         state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
@@ -73,10 +77,16 @@ def default_settings() -> dict:
         "interval": config.INTERVAL,
         "fast_sma": config.FAST_SMA,
         "slow_sma": config.SLOW_SMA,
+        "strategy": config.STRATEGY,
+        "trend_filter": config.TREND_FILTER,
         "trade_usdt": config.TRADE_USDT,
         "max_daily_loss_usdt": config.MAX_DAILY_LOSS_USDT,
         "stop_loss_pct": config.STOP_LOSS_PCT,
         "take_profit_pct": config.TAKE_PROFIT_PCT,
+        "atr_stop": config.ATR_STOP,
+        "atr_mult": config.ATR_MULT,
+        "sizing": config.SIZING,
+        "risk_pct": config.RISK_PCT,
         "news_filter": config.NEWS_FILTER,
         "news_before_min": config.NEWS_BEFORE_MIN,
         "news_after_min": config.NEWS_AFTER_MIN,
@@ -93,17 +103,27 @@ def load_settings() -> dict:
     return settings
 
 
+def is_true(value) -> bool:
+    return value in (True, 1, "1", "true")
+
+
 def validate_settings(values: dict) -> dict:
     try:
         s = {
             "interval": str(values["interval"]),
             "fast_sma": int(values["fast_sma"]),
             "slow_sma": int(values["slow_sma"]),
+            "strategy": str(values.get("strategy", "sma")),
+            "trend_filter": is_true(values.get("trend_filter")),
             "trade_usdt": float(values["trade_usdt"]),
             "max_daily_loss_usdt": float(values["max_daily_loss_usdt"]),
             "stop_loss_pct": float(values.get("stop_loss_pct") or 0),
             "take_profit_pct": float(values.get("take_profit_pct") or 0),
-            "news_filter": values.get("news_filter") in (True, 1, "1", "true"),
+            "atr_stop": str(values.get("atr_stop", "none")),
+            "atr_mult": float(values.get("atr_mult") or 0),
+            "sizing": str(values.get("sizing", "fixed")),
+            "risk_pct": float(values.get("risk_pct") or 0),
+            "news_filter": is_true(values.get("news_filter")),
             "news_before_min": int(values.get("news_before_min") or 0),
             "news_after_min": int(values.get("news_after_min") or 0),
             "news_countries": str(values.get("news_countries", "")),
@@ -124,6 +144,21 @@ def validate_settings(values: dict) -> dict:
         raise ValueError("Stop loss precisa estar entre 0 e 50% (0 desliga)")
     if not 0 <= s["take_profit_pct"] < 100:
         raise ValueError("Stop gain precisa estar entre 0 e 100% (0 desliga)")
+    if s["strategy"] not in STRATEGIES:
+        raise ValueError(f"Estratégia inválida: {s['strategy']}")
+    if s["atr_stop"] not in ATR_STOPS:
+        raise ValueError("Tipo de stop de ATR inválido")
+    if s["atr_stop"] != "none" and not 0.5 <= s["atr_mult"] <= 10:
+        raise ValueError("O multiplicador do ATR precisa estar entre 0,5 e 10")
+    if s["atr_stop"] != "none" and s["stop_loss_pct"]:
+        raise ValueError("Use o stop de ATR ou o stop loss %, não os dois")
+    if s["sizing"] not in SIZINGS:
+        raise ValueError("Tipo de tamanho da compra inválido")
+    if s["sizing"] == "risk":
+        if not 0.1 <= s["risk_pct"] <= 10:
+            raise ValueError("O risco por operação precisa estar entre 0,1 e 10%")
+        if s["atr_stop"] == "none" and not s["stop_loss_pct"]:
+            raise ValueError("O tamanho pelo risco precisa de um stop (ATR ou stop loss %)")
     if not (0 <= s["news_before_min"] <= 240 and 0 <= s["news_after_min"] <= 240):
         raise ValueError("A pausa antes e depois das notícias precisa estar entre 0 e 240 minutos")
     if s["news_impact"] not in news.IMPACTS:
@@ -226,13 +261,20 @@ class Bot:
 
     def run(self) -> None:
         s = self.s
+        name = STRATEGY_NAMES[s["strategy"]]
+        if s["strategy"] == "sma":
+            name += f" {s['fast_sma']} x {s['slow_sma']}"
+        if s["trend_filter"]:
+            name += " + MM200"
+        size = f"risco de {s['risk_pct']:g}% por compra" if s["sizing"] == "risk" else f"{s['trade_usdt']:g} USDT por compra"
         stops = []
+        if s["atr_stop"] != "none":
+            stops.append(f"stop {'móvel ' if s['atr_stop'] == 'trailing' else ''}{s['atr_mult']:g}N")
         if s["stop_loss_pct"]:
             stops.append(f"stop loss {s['stop_loss_pct']:g}%")
         if s["take_profit_pct"]:
             stops.append(f"stop gain {s['take_profit_pct']:g}%")
-        log(f"Robô iniciado: {config.SYMBOL} {s['interval']}, SMA {s['fast_sma']} x {s['slow_sma']}, "
-            f"{s['trade_usdt']:g} USDT por compra" + (", " + " e ".join(stops) if stops else ""))
+        log(f"Robô iniciado: {config.SYMBOL} {s['interval']}, {name}, {size}" + (", " + " e ".join(stops) if stops else ""))
         if s["news_filter"]:
             events = self._news_events()
             if events is None:
@@ -261,9 +303,10 @@ class Bot:
         state = load_state()
         self._check_protection(state)
 
-        df = self.client.klines(config.SYMBOL, s["interval"], limit=s["slow_sma"] + 50)
-        df = df[df["close_time"] < self.client.now_ms()]
-        df = add_signals(df, s["fast_sma"], s["slow_sma"])
+        df = self.client.klines(config.SYMBOL, s["interval"], limit=candles_needed(s))
+        df = df[df["close_time"] < self.client.now_ms()].reset_index(drop=True)
+        buy_rule, sell_rule = rules_for(df, s)
+        n = float(atr(df).iloc[-1])
         last = df.iloc[-1]
 
         if int(last["open_time"]) == state["last_candle"]:
@@ -273,22 +316,40 @@ class Bot:
         save_state(state)
 
         holding = Decimal(state["position_qty"]) > 0
-        log(
-            f"Preço {last['close']:.2f} | SMA{s['fast_sma']} {last['sma_fast']:.2f} | "
-            f"SMA{s['slow_sma']} {last['sma_slow']:.2f} | "
-            f"{'comprado' if holding else 'fora'} | resultado do dia {state['day_pnl']:+.2f}"
-        )
+        log(self._describe(df, n, holding, state))
 
-        if last["signal"] == BUY and not holding:
+        if holding and s["atr_stop"] == "trailing" and self._trail(state, float(last["close"]), n):
+            return
+        holding = Decimal(state["position_qty"]) > 0
+
+        if buy_rule.iloc[-1] and not holding:
             if state["day_pnl"] <= -s["max_daily_loss_usdt"]:
                 log("Sinal de compra ignorado: limite de perda diária atingido.")
             elif blocking := self._news_block():
                 when = datetime.fromtimestamp(blocking["time"]).strftime("%d/%m %H:%M")
                 log(f"Sinal de compra ignorado: notícia {blocking['country']} \"{blocking['title']}\" às {when}.")
             else:
-                self.buy(state)
-        elif last["signal"] == SELL and holding:
+                self.buy(state, n)
+        elif sell_rule.iloc[-1] and holding:
             self.sell(state)
+
+    def _describe(self, df, n: float, holding: bool, state: dict) -> str:
+        s = self.s
+        closes = df["close"]
+        parts = [f"Preço {closes.iloc[-1]:.2f}"]
+        if s["strategy"] in BREAKOUTS:
+            entry, exit = BREAKOUTS[s["strategy"]]
+            parts.append(f"máx{entry} {df['high'].iloc[-entry - 1:-1].max():.2f}")
+            parts.append(f"mín{exit} {df['low'].iloc[-exit - 1:-1].min():.2f}")
+        else:
+            parts.append(f"SMA{s['fast_sma']} {closes.iloc[-s['fast_sma']:].mean():.2f}")
+            parts.append(f"SMA{s['slow_sma']} {closes.iloc[-s['slow_sma']:].mean():.2f}")
+        if s["trend_filter"]:
+            parts.append(f"MM200 {closes.iloc[-TREND_PERIOD:].mean():.2f}")
+        parts.append(f"ATR {n:.2f}")
+        parts.append("comprado" if holding else "fora")
+        parts.append(f"resultado do dia {state['day_pnl']:+.2f}")
+        return " | ".join(parts)
 
     def _news_events(self) -> list[dict] | None:
         events, fetched_at = news.load_events(NEWS_CACHE_FILE)
@@ -306,44 +367,99 @@ class Bot:
             return None
         return news.blocking_event(events, time.time(), s["news_before_min"], s["news_after_min"])
 
-    def buy(self, state: dict) -> None:
-        market = self.market
-        order = self.client.market_buy(config.SYMBOL, self.s["trade_usdt"])
+    def _spend(self, n: float, price: float) -> float:
+        s = self.s
+        if s["sizing"] != "risk":
+            return s["trade_usdt"]
+        free = self.client.balances().get(self.market.quote, 0.0)
+        distance = s["atr_mult"] * n / price if s["atr_stop"] != "none" else s["stop_loss_pct"] / 100
+        return min(free * 0.99, free * s["risk_pct"] / 100 / distance)
+
+    def buy(self, state: dict, n: float) -> None:
+        market, s = self.market, self.s
+        if s["atr_stop"] != "none" and not n > 0:
+            log("Sinal de compra ignorado: ATR ainda não calculado.")
+            return
+        price = float(self.client.klines(config.SYMBOL, "1m", limit=1)["close"].iloc[-1])
+        spend = self._spend(n, price)
+        if spend < market.min_notional:
+            log(f"Sinal de compra ignorado: valor da compra ({spend:.2f}) abaixo do mínimo da corretora.")
+            return
+
+        order = self.client.market_buy(config.SYMBOL, spend)
         qty = Decimal(order["executedQty"]) - fee_in(order, market.base)
         cost = float(order["cummulativeQuoteQty"]) + float(fee_in(order, market.quote))
+        avg = cost / float(qty)
         state["position_qty"] = str(qty)
         state["entry_cost"] = cost
         state["protection"] = None
+        state["peak"] = avg
         save_state(state)
         record_trade("COMPRA", qty, cost, None)
         log(f"COMPRA: {qty} {market.base} por {cost:.2f} {market.quote}")
 
-        if self.s["stop_loss_pct"] or self.s["take_profit_pct"]:
+        sl_price = None
+        if s["atr_stop"] != "none":
+            sl_price = market.round_price(avg - s["atr_mult"] * n)
+        elif s["stop_loss_pct"]:
+            sl_price = market.round_price(avg * (1 - s["stop_loss_pct"] / 100))
+        tp_price = market.round_price(avg * (1 + s["take_profit_pct"] / 100)) if s["take_profit_pct"] else None
+        if sl_price or tp_price:
             try:
-                state["protection"] = self._protect(market.floor_qty(qty), cost / float(qty))
+                state["protection"] = self._place_protection(market.floor_qty(qty), sl_price, tp_price)
                 save_state(state)
             except BinanceError as e:
                 log(f"Compra feita, mas os stops NÃO foram criados: {e}")
 
-    def _protect(self, qty: Decimal, avg_price: float) -> dict:
-        sl, tp = self.s["stop_loss_pct"], self.s["take_profit_pct"]
+    def _place_protection(self, qty: Decimal, sl_price: str | None, tp_price: str | None) -> dict:
         quantity = format(qty, "f")
-        sl_price = self.market.round_price(avg_price * (1 - sl / 100))
-        tp_price = self.market.round_price(avg_price * (1 + tp / 100))
-
-        if sl and tp:
+        if sl_price and tp_price:
             r = self.client.oco_sell(config.SYMBOL, quantity, tp_price, sl_price, tag=BOT_TAG)
-            protection = {"list_id": r["orderListId"], "order_ids": [o["orderId"] for o in r["orders"]]}
+            order_ids, list_id = [o["orderId"] for o in r["orders"]], r["orderListId"]
             log(f"Stops criados: stop loss {sl_price}, stop gain {tp_price}")
-        elif sl:
+        elif sl_price:
             r = self.client.stop_loss_sell(config.SYMBOL, quantity, sl_price, tag=BOT_TAG)
-            protection = {"list_id": -1, "order_ids": [r["orderId"]]}
+            order_ids, list_id = [r["orderId"]], -1
             log(f"Stop criado: stop loss {sl_price}")
         else:
             r = self.client.take_profit_sell(config.SYMBOL, quantity, tp_price, tag=BOT_TAG)
-            protection = {"list_id": -1, "order_ids": [r["orderId"]]}
+            order_ids, list_id = [r["orderId"]], -1
             log(f"Stop criado: stop gain {tp_price}")
-        return protection
+        return {
+            "list_id": list_id,
+            "order_ids": order_ids,
+            "sl": float(sl_price) if sl_price else None,
+            "tp": float(tp_price) if tp_price else None,
+        }
+
+    def _trail(self, state: dict, close: float, n: float) -> bool:
+        protection = state.get("protection")
+        if not protection or not protection.get("sl") or not n > 0:
+            return False
+        peak = max(state.get("peak") or close, close)
+        state["peak"] = peak
+        new_sl = float(self.market.round_price(peak - self.s["atr_mult"] * n))
+        if new_sl <= protection["sl"]:
+            save_state(state)
+            return False
+        if new_sl >= close:
+            log(f"Stop móvel ({new_sl:.2f}) acima do fechamento, vendendo agora.")
+            self.sell(state)
+            return True
+
+        tp = protection.get("tp")
+        self._cancel_protection(state)
+        save_state(state)
+        qty = self.market.floor_qty(Decimal(state["position_qty"]))
+        try:
+            state["protection"] = self._place_protection(
+                qty, self.market.round_price(new_sl), self.market.round_price(tp) if tp else None
+            )
+            log(f"Stop móvel subiu para {new_sl:.2f}")
+        except BinanceError as e:
+            log(f"Não foi possível subir o stop móvel, a posição ficou sem stop: {e}")
+        save_state(state)
+        return False
 
     def _check_protection(self, state: dict) -> bool:
         protection = state.get("protection")
@@ -406,6 +522,7 @@ class Bot:
         state["position_qty"] = "0"
         state["entry_cost"] = 0.0
         state["protection"] = None
+        state["peak"] = None
         save_state(state)
 
 

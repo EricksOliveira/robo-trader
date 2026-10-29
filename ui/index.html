@@ -43,18 +43,63 @@
           <h2>Robô automático</h2>
           <div class="bot-status"><span id="bot-dot" class="dot"></span><span id="bot-state">...</span></div>
           <fieldset id="bot-form">
+            <button id="bot-preset" type="button" class="link">Usar configuração recomendada</button>
             <label class="field">
               <span>Tempo gráfico</span>
               <select id="bot-interval"></select>
             </label>
-            <label class="field"><span>Média rápida</span><input id="bot-fast" type="number" min="2" step="1"></label>
-            <label class="field"><span>Média lenta</span><input id="bot-slow" type="number" min="3" step="1"></label>
-            <label class="field"><span>Valor por compra (USDT)</span><input id="bot-amount" type="number" min="5" step="1"></label>
+            <label class="field">
+              <span>Estratégia</span>
+              <select id="bot-strategy">
+                <option value="sma">Médias</option>
+                <option value="turtle_20_10">Tartarugas 20/10</option>
+                <option value="turtle_55_20">Tartarugas 55/20</option>
+              </select>
+            </label>
+            <label class="field" data-show="sma">
+              <span>Média rápida</span>
+              <input id="bot-fast" type="number" min="2" step="1">
+            </label>
+            <label class="field" data-show="sma">
+              <span>Média lenta</span>
+              <input id="bot-slow" type="number" min="3" step="1">
+            </label>
+            <label class="field">
+              <span>Filtro da média de 200</span>
+              <input id="bot-trend" type="checkbox">
+            </label>
+            <label class="field">
+              <span>Tamanho da compra</span>
+              <select id="bot-sizing">
+                <option value="fixed">Valor fixo</option>
+                <option value="risk">Pelo risco</option>
+              </select>
+            </label>
+            <label class="field" data-show="fixed">
+              <span>Valor por compra (USDT)</span>
+              <input id="bot-amount" type="number" min="5" step="1">
+            </label>
+            <label class="field" data-show="risk">
+              <span>Risco por compra %</span>
+              <input id="bot-risk" type="number" min="0.1" max="10" step="0.1">
+            </label>
             <label class="field">
               <span>Perda máxima por dia</span>
               <input id="bot-max-loss" type="number" min="1" step="1">
             </label>
             <label class="field">
+              <span>Stop de ATR</span>
+              <select id="bot-atr-stop">
+                <option value="none">Nenhum</option>
+                <option value="fixed">Fixo</option>
+                <option value="trailing">Móvel</option>
+              </select>
+            </label>
+            <label class="field" data-show="atr">
+              <span>Distância (x ATR)</span>
+              <input id="bot-atr-mult" type="number" min="0.5" max="10" step="0.5">
+            </label>
+            <label class="field" data-show="pct">
               <span>Stop loss %</span>
               <input id="bot-sl" type="number" min="0" step="0.1" placeholder="0 = sem">
             </label>

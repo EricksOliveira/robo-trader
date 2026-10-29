@@ -1,11 +1,19 @@
 # Robô trader (estudo)
 
-Robô de cruzamento de médias móveis para a Binance, feito para aprender. Roda por padrão na
-**testnet**, com dinheiro fictício.
+Robô de trading para a Binance, feito para aprender. Roda por padrão na **testnet**, com dinheiro
+fictício.
 
-Estratégia: quando a média dos últimos 9 candles cruza para cima da média dos últimos 21, compra.
-Quando cruza para baixo, vende. Os valores padrão ficam em `config.py`. O que for mudado pelo
-painel fica salvo em `settings.json` e tem prioridade.
+Estratégias disponíveis:
+
+- **Médias**: compra quando a média rápida (9) cruza para cima da lenta (21) e vende no cruzamento
+  para baixo;
+- **Tartarugas 20/10 e 55/20** (Richard Dennis): compra quando o fechamento passa da máxima dos
+  últimos 20 (ou 55) candles e vende quando fica abaixo da mínima dos últimos 10 (ou 20);
+- **Filtro da média de 200** (Paul Tudor Jones), combinável com qualquer uma: só compra acima da
+  média de 200 candles e vende se o preço cair abaixo dela.
+
+Os valores padrão ficam em `config.py`. O que for mudado pelo painel fica salvo em
+`settings.json` e tem prioridade.
 
 ## Arquivos
 
@@ -14,6 +22,7 @@ painel fica salvo em `settings.json` e tem prioridade.
 | `config.py` | Par, testnet ou real, e os valores padrão do robô |
 | `strategy.py` | Calcula as médias e marca os sinais de compra e venda |
 | `backtest.py` | Testa a estratégia no histórico real da Binance (não precisa de chave) |
+| `compare.py` | Compara várias estratégias (médias, Tartarugas, MM200, stops de ATR) |
 | `bot.py` | Robô ao vivo: compra e vende na testnet |
 | `binance_client.py` | Conversa com a API da Binance |
 | `news.py` | Calendário de notícias econômicas (ForexFactory) |
@@ -40,6 +49,28 @@ python backtest.py --days 730 --interval 4h --fast 20 --slow 50
 
 Compare sempre com a linha "Comprar e segurar". Se o robô não ganha de simplesmente comprar e
 esperar, a estratégia não está ajudando.
+
+### Comparar estratégias
+
+```powershell
+python compare.py
+python compare.py --symbol ETHUSDT --intervals 4h,1d --risk 1
+```
+
+Testa várias estratégias ao mesmo tempo no histórico real (1h: 1 ano, 4h: 3 anos, 1d: 6 anos) e
+mostra uma tabela por tempo gráfico, da melhor para a pior:
+
+- **Médias**: o cruzamento de médias que o robô usa hoje;
+- **Tartarugas 20/10 e 55/20**: compra quando o fechamento passa da máxima dos últimos 20 (ou 55)
+  candles e vende quando fica abaixo da mínima dos últimos 10 (ou 20);
+- **+ MM200**: só compra acima da média de 200 candles e vende se o preço cair abaixo dela;
+- **stop 2N**: stop a 2 ATR (20 períodos) abaixo do preço de compra;
+- **stop móvel 3N**: stop a 3 ATR abaixo do maior fechamento desde a compra.
+
+Os sinais usam o fechamento do candle e a ordem sai na abertura do próximo. `--risk 1` troca "todo
+o capital em cada compra" por um tamanho de compra que perde 1% do capital se o stop for atingido.
+A escolha da melhor linha num mesmo histórico tende a superestimar o resultado: confira se ela
+também vai bem em outra moeda e em outro tempo gráfico.
 
 ## 2. Testnet
 
@@ -87,13 +118,25 @@ direita há três abas: Robô, Manual e Histórico.
 ### Aba Robô
 
 Liga e desliga o robô e mostra a posição dele e o registro (`bot.log`) ao vivo. As configurações
-(tempo gráfico, médias, valor por compra, perda máxima por dia, stop loss e stop gain) só podem
-ser mudadas com o robô desligado e são salvas ao ligar.
+só podem ser mudadas com o robô desligado e são salvas ao ligar. O gráfico mostra as linhas da
+estratégia salva: as duas médias, ou a máxima e a mínima das Tartarugas, e a MM200 quando o filtro
+está ligado.
 
-Com stop loss ou stop gain maior que zero, logo depois de cada compra o robô registra os stops na
-Binance, iguais aos da ordem manual. Se um stop executar, o robô percebe no próximo candle e
-registra o resultado. Num sinal de venda, ele cancela os stops e vende a mercado. Os stops do robô
-aparecem em "Ordens abertas" marcados como "robô" e sem botões, para não confundir a posição dele.
+"Usar configuração recomendada" preenche a combinação que foi melhor nos testes do `compare.py`
+em BTC e ETH: Tartarugas 20/10, filtro da média de 200, stop fixo de 2 ATR e tempo gráfico de 4h.
+
+- **Tamanho da compra**: valor fixo em USDT, ou pelo risco: o robô calcula a compra para perder
+  só o percentual escolhido do saldo livre em USDT se o stop for atingido (limitada ao saldo). Exige
+  um stop.
+- **Stop de ATR**: fixo (preço de compra menos N x ATR de 20 períodos) ou móvel (maior fechamento
+  desde a compra menos N x ATR). O stop móvel só sobe: a cada candle, o robô cancela o stop antigo
+  na Binance e cria um novo mais alto. Não pode ser usado junto com o stop loss %.
+- **Stop loss % e stop gain %**: como antes. O stop gain pode ser combinado com o stop de ATR.
+
+Logo depois de cada compra, o robô registra os stops na Binance, iguais aos da ordem manual. Se um
+stop executar, o robô percebe no próximo candle e registra o resultado. Num sinal de venda, ele
+cancela os stops e vende a mercado. Os stops do robô aparecem em "Ordens abertas" marcados como
+"robô" e sem botões, para não confundir a posição dele.
 
 Fechar o painel desliga o robô. Os stops que já estão na Binance continuam valendo.
 

@@ -148,7 +148,7 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .order button:hover { background: #363a45; }
 
 .field select {
-  width: 110px;
+  width: 140px;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -158,6 +158,17 @@ button:disabled { opacity: 0.5; cursor: wait; }
 }
 
 fieldset { border: none; margin: 0; padding: 0; }
+button.link {
+  background: none;
+  border: none;
+  padding: 0 0 6px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+button.link:hover { text-decoration: underline; }
+fieldset:disabled button.link { display: none; }
 fieldset:disabled input, fieldset:disabled select { opacity: 0.6; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }

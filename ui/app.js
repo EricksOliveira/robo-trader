@@ -1,14 +1,13 @@
-const COLORS = { fast: "#f5c518", slow: "#2962ff", up: "#26a69a", down: "#ef5350" };
+const COLORS = { up: "#26a69a", down: "#ef5350" };
 
 let cfg;
 let interval;
 let chart;
 let candles;
-let fastLine;
-let slowLine;
+let lineSeries = [];
 let lastTime = 0;
 let lastPrice = 0;
-let last = { candle: null, fast: null, slow: null };
+let last = { candle: null, values: [] };
 
 const $ = (id) => document.getElementById(id);
 
@@ -58,16 +57,27 @@ function createChart() {
     wickUpColor: COLORS.up, wickDownColor: COLORS.down,
     borderVisible: false,
   });
-  fastLine = chart.addLineSeries({ color: COLORS.fast, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-  slowLine = chart.addLineSeries({ color: COLORS.slow, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-
   chart.subscribeCrosshairMove((param) => {
-    if (!param.time) return renderLegend(last.candle, last.fast, last.slow);
-    renderLegend(param.seriesData.get(candles), param.seriesData.get(fastLine)?.value, param.seriesData.get(slowLine)?.value);
+    if (!param.time) return renderLegend(last.candle, last.values);
+    const values = lineSeries.map((l) => ({ name: l.name, color: l.color, value: param.seriesData.get(l.series)?.value }));
+    renderLegend(param.seriesData.get(candles), values);
   });
 }
 
-function renderLegend(candle, fast, slow) {
+function setLines(lines) {
+  for (const l of lineSeries) chart.removeSeries(l.series);
+  lineSeries = lines.map((l) => {
+    const series = chart.addLineSeries({ color: l.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    series.setData(l.data);
+    return { name: l.name, color: l.color, series };
+  });
+}
+
+function sameLines(lines) {
+  return lines.length === lineSeries.length && lines.every((l, i) => l.name === lineSeries[i].name);
+}
+
+function renderLegend(candle, values) {
   const legend = $("legend");
   legend.replaceChildren();
   const add = (text, color) => {
@@ -79,8 +89,9 @@ function renderLegend(candle, fast, slow) {
     const color = candle.close >= candle.open ? COLORS.up : COLORS.down;
     add(`Abe ${num(candle.open)}  Máx ${num(candle.high)}  Mín ${num(candle.low)}  Fec ${num(candle.close)}`, color);
   }
-  if (fast != null) add(`SMA ${cfg.fast}: ${num(fast)}`, COLORS.fast);
-  if (slow != null) add(`SMA ${cfg.slow}: ${num(slow)}`, COLORS.slow);
+  for (const v of values) {
+    if (v.value != null) add(`${v.name}: ${num(v.value)}`, v.color);
+  }
 }
 
 function updateTail(series, points) {
@@ -96,22 +107,23 @@ async function refreshChart(reset) {
   if (data.error) return setStatus("Erro no gráfico: " + data.error, true);
   if (!data.candles.length) return;
 
-  if (reset) {
+  if (reset || !sameLines(data.lines)) {
     candles.setData(data.candles);
-    fastLine.setData(data.fast);
-    slowLine.setData(data.slow);
-    chart.timeScale().scrollToRealTime();
+    setLines(data.lines);
+    if (reset) chart.timeScale().scrollToRealTime();
   } else {
     updateTail(candles, data.candles);
-    updateTail(fastLine, data.fast);
-    updateTail(slowLine, data.slow);
+    data.lines.forEach((l, i) => updateTail(lineSeries[i].series, l.data));
   }
   candles.setMarkers(data.markers);
 
   lastTime = data.candles.at(-1).time;
-  last = { candle: data.candles.at(-1), fast: data.fast.at(-1)?.value, slow: data.slow.at(-1)?.value };
+  last = {
+    candle: data.candles.at(-1),
+    values: data.lines.map((l) => ({ name: l.name, color: l.color, value: l.data.at(-1)?.value })),
+  };
   lastPrice = last.candle.close;
-  renderLegend(last.candle, last.fast, last.slow);
+  renderLegend(last.candle, last.values);
   updateStopHints();
 }
 
@@ -275,10 +287,16 @@ function setupOrderForm() {
 
 const BOT_FIELDS = {
   interval: "bot-interval",
+  strategy: "bot-strategy",
   fast_sma: "bot-fast",
   slow_sma: "bot-slow",
+  trend_filter: "bot-trend",
+  sizing: "bot-sizing",
   trade_usdt: "bot-amount",
+  risk_pct: "bot-risk",
   max_daily_loss_usdt: "bot-max-loss",
+  atr_stop: "bot-atr-stop",
+  atr_mult: "bot-atr-mult",
   stop_loss_pct: "bot-sl",
   take_profit_pct: "bot-tp",
   news_filter: "bot-news",
@@ -288,10 +306,35 @@ const BOT_FIELDS = {
   news_impact: "bot-news-impact",
 };
 
+const RECOMMENDED = {
+  interval: "4h",
+  strategy: "turtle_20_10",
+  trend_filter: true,
+  atr_stop: "fixed",
+  atr_mult: 2,
+  stop_loss_pct: 0,
+  take_profit_pct: 0,
+};
+
 function fillBotForm(settings) {
   for (const [key, id] of Object.entries(BOT_FIELDS)) {
+    if (!(key in settings)) continue;
     if ($(id).type === "checkbox") $(id).checked = settings[key];
     else $(id).value = settings[key];
+  }
+  updateBotFormVisibility();
+}
+
+function updateBotFormVisibility() {
+  const visible = {
+    sma: $("bot-strategy").value === "sma",
+    fixed: $("bot-sizing").value === "fixed",
+    risk: $("bot-sizing").value === "risk",
+    atr: $("bot-atr-stop").value !== "none",
+    pct: $("bot-atr-stop").value === "none",
+  };
+  for (const field of document.querySelectorAll("#bot-form [data-show]")) {
+    field.style.display = visible[field.dataset.show] ? "" : "none";
   }
 }
 
@@ -300,6 +343,7 @@ function readBotForm() {
   for (const [key, id] of Object.entries(BOT_FIELDS)) {
     values[key] = $(id).type === "checkbox" ? $(id).checked : $(id).value;
   }
+  if (values.atr_stop !== "none") values.stop_loss_pct = 0;
   return values;
 }
 
@@ -366,8 +410,6 @@ async function refreshBot() {
 }
 
 function applySettingsToChart(settings) {
-  cfg.fast = settings.fast_sma;
-  cfg.slow = settings.slow_sma;
   if (cfg.intervals.includes(settings.interval)) selectInterval(settings.interval);
   else refreshChart(true);
 }
@@ -376,6 +418,11 @@ function setupBot(settings) {
   const select = $("bot-interval");
   for (const value of cfg.intervals) select.appendChild(el("option", value));
   fillBotForm(settings);
+  for (const id of ["bot-strategy", "bot-sizing", "bot-atr-stop"]) $(id).onchange = updateBotFormVisibility;
+  $("bot-preset").onclick = () => {
+    fillBotForm(RECOMMENDED);
+    showBotMessage("Configuração recomendada preenchida. Clique em Ligar robô para salvar.", true);
+  };
 
   $("bot-start").onclick = async () => {
     if (!confirmReal("Ligar o robô automático?")) return;
