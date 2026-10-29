@@ -24,6 +24,7 @@ from bot import (
     InstanceLock,
     Market,
     check_position_symbol,
+    estimate_missing_fees,
     fee_in,
     load_settings,
     load_state,
@@ -204,16 +205,18 @@ class Api:
     def get_news(self) -> dict:
         s = load_settings()
         events, fetched_at = news.load_events(NEWS_CACHE_FILE)
-        events = news.relevant(events, news.parse_countries(s["news_countries"]), s["news_impact"])
         now = time.time()
+        fresh = news.is_fresh(events, fetched_at, now)
+        events = news.relevant(events, news.parse_countries(s["news_countries"]), s["news_impact"])
         upcoming = [e for e in events if e["time"] + s["news_after_min"] * 60 >= now][:8]
         for e in upcoming:
             e["label"] = datetime.fromtimestamp(e["time"]).strftime("%d/%m %H:%M")
         return {
             "events": upcoming,
-            "active": news.blocking_event(events, now, s["news_before_min"], s["news_after_min"]),
+            "active": news.blocking_event(events, now, s["news_before_min"], s["news_after_min"]) if fresh else None,
             "filter": s["news_filter"],
             "fetched": datetime.fromtimestamp(fetched_at).strftime("%d/%m %H:%M") if fetched_at else None,
+            "stale": bool(fetched_at) and not fresh,
         }
 
     def set_symbol(self, symbol: str) -> dict:
@@ -356,6 +359,7 @@ class Api:
             raise ValueError(f"Valor mínimo por ordem: {market.min_notional:g} {market.quote}")
 
         order = client.market_buy(symbol, amount)
+        estimate_missing_fees(order, market)
         executed = Decimal(order["executedQty"])
         qty = market.floor_qty(executed - fee_in(order, market.base))
         avg = float(order["cummulativeQuoteQty"]) / float(executed)

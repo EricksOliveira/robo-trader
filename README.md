@@ -147,10 +147,14 @@ stop executar, o robô percebe no próximo candle e registra o resultado. Num si
 cancela os stops e vende a mercado. Os stops do robô aparecem em "Ordens abertas" marcados como
 "robô" e sem botões, para não confundir a posição dele.
 
+Se a compra ficar sem stop (a Binance recusou a ordem ou alguém cancelou o stop pelo site), o robô
+cria o stop de novo no próximo candle. Se o preço já tiver passado do stop, ele vende a mercado.
+
 Fechar o painel desliga o robô. Os stops que já estão na Binance continuam valendo.
 
 O card **Resultados do robô** soma, a partir do `trades.csv`, os ganhos, as perdas e o total das
-vendas e stops do robô já fechados (com as taxas descontadas), de hoje, dos últimos 7 ou 30 dias ou
+vendas e stops do robô já fechados (com as taxas descontadas, inclusive as pagas em BNB, convertidas
+pelo preço do momento), de hoje, dos últimos 7 ou 30 dias ou
 de tudo. Soma todos os pares, em USDT. Compras manuais e a compra ainda aberta não entram.
 
 ### Filtro de notícias
@@ -163,8 +167,9 @@ regressiva, e um aviso amarelo aparece no topo durante a janela de pausa.
 O calendário vem do arquivo público do ForexFactory (`nfs.faireconomy.media`), baixado no máximo a
 cada 4 horas e guardado em `news_cache.json`. O ForexFactory bloqueia quem consulta com frequência
 maior. Os horários já aparecem no fuso do computador. O arquivo não traz o resultado real da
-notícia, só a previsão e o valor anterior. Se o calendário estiver indisponível, o robô segue sem o
-filtro e avisa no registro.
+notícia, só a previsão e o valor anterior. Se o calendário estiver indisponível ou desatualizado
+(mais de 12 horas sem conseguir baixar, e a semana da cópia guardada já acabou), o robô segue sem o
+filtro e avisa no registro, e o painel mostra "Desatualizado".
 
 ### Ordem manual
 

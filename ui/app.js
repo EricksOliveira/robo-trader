@@ -387,9 +387,9 @@ async function refreshNews() {
     box.appendChild(item);
   }
   if (!data.events.length) box.appendChild(el("div", "Nenhuma notícia relevante nesta semana", "muted"));
-  $("news-info").textContent = data.fetched
-    ? `Fonte: ForexFactory, atualizado em ${data.fetched}`
-    : "Calendário indisponível no momento";
+  $("news-info").textContent = !data.fetched
+    ? "Calendário indisponível no momento"
+    : `Fonte: ForexFactory, atualizado em ${data.fetched}` + (data.stale ? ". Desatualizado: o robô segue sem o filtro" : "");
 
   const alert = $("news-alert");
   if (data.active) {

@@ -22,8 +22,20 @@ INTERVAL_MS = {
 }
 
 
+ORDER_NOT_FOUND = -2013
+BACKEND_TIMEOUT = -1007
+
+
 class BinanceError(Exception):
-    pass
+    def __init__(self, message: str, code: int | None = None, status: int | None = None):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+    @property
+    def outcome_unknown(self) -> bool:
+        # Binance documents these as "the request may have been executed"
+        return self.code == BACKEND_TIMEOUT or (self.status or 0) >= 500
 
 
 def client_order_id(tag: str, kind: str) -> str:
@@ -70,9 +82,10 @@ class BinanceClient:
         try:
             data = resp.json()
         except ValueError:
-            raise BinanceError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            raise BinanceError(f"HTTP {resp.status_code}: {resp.text[:200]}", status=resp.status_code)
         if resp.status_code != 200:
-            raise BinanceError(f"HTTP {resp.status_code}: {data}")
+            code = data.get("code") if isinstance(data, dict) else None
+            raise BinanceError(f"HTTP {resp.status_code}: {data}", code, resp.status_code)
         return data
 
     def now_ms(self) -> int:
@@ -114,31 +127,65 @@ class BinanceClient:
         account = self._request("GET", "/api/v3/account", signed=True)
         return {b["asset"]: {"free": float(b["free"]), "locked": float(b["locked"])} for b in account["balances"]}
 
-    def market_buy(self, symbol: str, quote_amount: float) -> dict:
+    def _market_order(self, params: dict, tag: str) -> dict:
+        params["newClientOrderId"] = client_order_id(tag or "web", params["side"].lower())
+        try:
+            return self._request("POST", "/api/v3/order", params, signed=True)
+        except requests.RequestException as e:
+            lost = e
+        except BinanceError as e:
+            if not e.outcome_unknown:
+                raise
+            lost = e
+        # Binance may have filled the order even though the response never arrived
+        order = None
+        for _ in range(5):
+            time.sleep(3)
+            try:
+                if order is None:
+                    order = self._request("GET", "/api/v3/order", {
+                        "symbol": params["symbol"], "origClientOrderId": params["newClientOrderId"],
+                    }, signed=True)
+                order["fills"] = self.order_fills(params["symbol"], order["orderId"])
+                return order
+            except BinanceError as e:
+                if order is None and e.code == ORDER_NOT_FOUND:
+                    raise lost
+            except requests.RequestException:
+                pass
+        if order is not None:
+            # executed, but its fees are unknown
+            order["fills"] = None
+            return order
+        raise BinanceError(f"Sem resposta da Binance para a ordem {params['newClientOrderId']}. Confira na corretora "
+                           f"se ela foi executada.")
+
+    def market_buy(self, symbol: str, quote_amount: float, tag: str = "") -> dict:
         params = {"symbol": symbol, "side": "BUY", "type": "MARKET", "quoteOrderQty": f"{quote_amount:.2f}"}
-        return self._request("POST", "/api/v3/order", params, signed=True)
+        return self._market_order(params, tag)
 
-    def market_sell(self, symbol: str, quantity: str) -> dict:
+    def market_sell(self, symbol: str, quantity: str, tag: str = "") -> dict:
         params = {"symbol": symbol, "side": "SELL", "type": "MARKET", "quantity": quantity}
-        return self._request("POST", "/api/v3/order", params, signed=True)
+        return self._market_order(params, tag)
 
-    def market_sell_quote(self, symbol: str, quote_amount: float) -> dict:
+    def market_sell_quote(self, symbol: str, quote_amount: float, tag: str = "") -> dict:
         params = {"symbol": symbol, "side": "SELL", "type": "MARKET", "quoteOrderQty": f"{quote_amount:.2f}"}
-        return self._request("POST", "/api/v3/order", params, signed=True)
+        return self._market_order(params, tag)
 
-    def stop_loss_sell(self, symbol: str, quantity: str, stop_price: str, tag: str = "") -> dict:
+    def stop_loss_sell(self, symbol: str, quantity: str, stop_price: str, client_id: str = "") -> dict:
         params = {"symbol": symbol, "side": "SELL", "type": "STOP_LOSS", "quantity": quantity, "stopPrice": stop_price}
-        if tag:
-            params["newClientOrderId"] = client_order_id(tag, "sl")
+        if client_id:
+            params["newClientOrderId"] = client_id
         return self._request("POST", "/api/v3/order", params, signed=True)
 
-    def take_profit_sell(self, symbol: str, quantity: str, price: str, tag: str = "") -> dict:
+    def take_profit_sell(self, symbol: str, quantity: str, price: str, client_id: str = "") -> dict:
         params = {"symbol": symbol, "side": "SELL", "type": "LIMIT_MAKER", "quantity": quantity, "price": price}
-        if tag:
-            params["newClientOrderId"] = client_order_id(tag, "tp")
+        if client_id:
+            params["newClientOrderId"] = client_id
         return self._request("POST", "/api/v3/order", params, signed=True)
 
-    def oco_sell(self, symbol: str, quantity: str, take_profit: str, stop_loss: str, tag: str = "") -> dict:
+    def oco_sell(self, symbol: str, quantity: str, take_profit: str, stop_loss: str,
+                 tp_client_id: str = "", sl_client_id: str = "") -> dict:
         params = {
             "symbol": symbol,
             "side": "SELL",
@@ -148,13 +195,16 @@ class BinanceClient:
             "belowType": "STOP_LOSS",
             "belowStopPrice": stop_loss,
         }
-        if tag:
-            params["aboveClientOrderId"] = client_order_id(tag, "tp")
-            params["belowClientOrderId"] = client_order_id(tag, "sl")
+        if tp_client_id and sl_client_id:
+            params["aboveClientOrderId"] = tp_client_id
+            params["belowClientOrderId"] = sl_client_id
         return self._request("POST", "/api/v3/orderList/oco", params, signed=True)
 
     def get_order(self, symbol: str, order_id: int) -> dict:
         return self._request("GET", "/api/v3/order", {"symbol": symbol, "orderId": order_id}, signed=True)
+
+    def get_order_by_client_id(self, symbol: str, client_id: str) -> dict:
+        return self._request("GET", "/api/v3/order", {"symbol": symbol, "origClientOrderId": client_id}, signed=True)
 
     def open_orders(self, symbol: str) -> list[dict]:
         return self._request("GET", "/api/v3/openOrders", {"symbol": symbol}, signed=True)
@@ -167,3 +217,6 @@ class BinanceClient:
 
     def my_trades(self, symbol: str, limit: int = 500) -> list[dict]:
         return self._request("GET", "/api/v3/myTrades", {"symbol": symbol, "limit": limit}, signed=True)
+
+    def order_fills(self, symbol: str, order_id: int) -> list[dict]:
+        return self._request("GET", "/api/v3/myTrades", {"symbol": symbol, "orderId": order_id}, signed=True)

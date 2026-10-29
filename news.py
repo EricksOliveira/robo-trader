@@ -11,6 +11,7 @@ FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 # ForexFactory blocks clients that poll this feed too often
 REFRESH_SECONDS = 4 * 3600
 RETRY_SECONDS = 15 * 60
+STALE_SECONDS = 12 * 3600
 IMPACTS = {"high": {"High"}, "high_medium": {"High", "Medium"}}
 
 _lock = threading.Lock()
@@ -69,6 +70,13 @@ def load_events(cache_file: Path) -> tuple[list[dict], float]:
             return [], 0.0
         events = [e for e in (_parse(r) for r in cache["events"]) if e]
         return sorted(events, key=lambda e: e["time"]), cache["fetched_at"]
+
+
+def is_fresh(events: list[dict], fetched_at: float, now: float) -> bool:
+    # an old copy is still good while its week lasts; once every event is a day behind, the week has turned
+    if not fetched_at:
+        return False
+    return now - fetched_at <= STALE_SECONDS or any(e["time"] + 86400 >= now for e in events)
 
 
 def relevant(events: list[dict], countries: set[str], impact: str) -> list[dict]:

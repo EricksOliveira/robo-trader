@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 import config
 import news
-from binance_client import INTERVAL_MS, BinanceClient, BinanceError
+from binance_client import INTERVAL_MS, ORDER_NOT_FOUND, BinanceClient, BinanceError, client_order_id
 from strategy import BREAKOUTS, STRATEGIES, TREND_PERIOD, atr, candles_needed, rules_for
 
 if getattr(sys, "frozen", False):
@@ -61,10 +61,15 @@ def load_state() -> dict:
         "day_pnl": 0.0,
         "last_candle": 0,
         "protection": None,
+        "stop_sl": None,
+        "stop_tp": None,
+        "pending_ids": [],
         "peak": None,
     }
     if STATE_FILE.exists():
         state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
+    if state["protection"] and state["stop_sl"] is None and state["stop_tp"] is None:
+        state["stop_sl"], state["stop_tp"] = state["protection"]["sl"], state["protection"]["tp"]
     if state["day"] != today():
         state["day"] = today()
         state["day_pnl"] = 0.0
@@ -188,25 +193,30 @@ def save_settings(values: dict) -> dict:
 
 
 def record_trade(symbol: str, side: str, qty: Decimal, quote: float, pnl: float | None) -> None:
-    new_file = not TRADES_FILE.exists()
-    with TRADES_FILE.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if new_file:
-            writer.writerow(["data", "lado", "quantidade", "preco_medio", "valor_usdt", "lucro_usdt", "par"])
-        price = quote / float(qty) if qty else 0.0
-        writer.writerow([
-            datetime.now().isoformat(timespec="seconds"),
-            side,
-            str(qty),
-            f"{price:.8f}".rstrip("0").rstrip("."),
-            f"{quote:.2f}",
-            "" if pnl is None else f"{pnl:.2f}",
-            symbol,
-        ])
+    price = quote / float(qty) if qty else 0.0
+    row = [
+        datetime.now().isoformat(timespec="seconds"),
+        side,
+        str(qty),
+        f"{price:.8f}".rstrip("0").rstrip("."),
+        f"{quote:.2f}",
+        "" if pnl is None else f"{pnl:.2f}",
+        symbol,
+    ]
+    try:
+        new_file = not TRADES_FILE.exists()
+        with TRADES_FILE.open("a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if new_file:
+                writer.writerow(["data", "lado", "quantidade", "preco_medio", "valor_usdt", "lucro_usdt", "par"])
+            writer.writerow(row)
+    except OSError as e:
+        # Excel locks the file while it is open
+        log(f"Não foi possível gravar no trades.csv ({e.strerror}). Operação não registrada: {','.join(row)}")
 
 
 def fee_in(order: dict, asset: str) -> Decimal:
-    return sum((Decimal(f["commission"]) for f in order.get("fills", []) if f["commissionAsset"] == asset), Decimal(0))
+    return sum((Decimal(f["commission"]) for f in order.get("fills") or [] if f["commissionAsset"] == asset), Decimal(0))
 
 
 class Market:
@@ -226,6 +236,18 @@ class Market:
 
     def round_price(self, price: float) -> str:
         return format(Decimal(str(price)).quantize(self.tick), "f")
+
+
+def estimate_missing_fees(order: dict, market: "Market") -> None:
+    if order.get("fills") is not None:
+        return
+    rate = Decimal(str(config.FEE_RATE))
+    if order["side"] == "BUY":
+        fee, asset = Decimal(order["executedQty"]) * rate, market.base
+    else:
+        fee, asset = Decimal(order["cummulativeQuoteQty"]) * rate, market.quote
+    order["fills"] = [{"commission": str(fee), "commissionAsset": asset, "price": "0"}]
+    log(f"Taxa da ordem {order['orderId']} desconhecida, usando a estimativa de {config.FEE_RATE:.1%}.")
 
 
 class InstanceLock:
@@ -307,19 +329,27 @@ class Bot:
                 self.tick()
             except (BinanceError, requests.RequestException) as e:
                 log(f"Erro, tentando de novo no próximo candle: {e}")
+            except Exception as e:
+                log(f"Erro inesperado, tentando de novo no próximo candle: {e!r}")
             self._sleep_until_next_candle()
         log("Robô parado.")
 
     def _sleep_until_next_candle(self) -> None:
         period = INTERVAL_MS[self.s["interval"]] / 1000
-        end = (time.time() // period + 1) * period + 5
-        while not self.stop_event.is_set() and time.time() < end:
-            self.stop_event.wait(min(1.0, end - time.time()))
+        now = self.client.now_ms() / 1000
+        deadline = time.monotonic() + (now // period + 1) * period + 5 - now
+        while not self.stop_event.is_set() and time.monotonic() < deadline:
+            self.stop_event.wait(min(1.0, deadline - time.monotonic()))
 
     def tick(self) -> None:
         s = self.s
+        # PC clocks drift, and Binance rejects signed requests more than a second off
+        self.client.sync_time()
+        self.data.time_offset_ms = self.client.time_offset_ms
         state = load_state()
         self._check_protection(state)
+        if self._restore_protection(state):
+            return
 
         df = self.data.klines(self.symbol, s["interval"], limit=candles_needed(s))
         df = df[df["close_time"] < self.client.now_ms()].reset_index(drop=True)
@@ -371,7 +401,7 @@ class Bot:
 
     def _news_events(self) -> list[dict] | None:
         events, fetched_at = news.load_events(NEWS_CACHE_FILE)
-        if not fetched_at:
+        if not news.is_fresh(events, fetched_at, time.time()):
             return None
         return news.relevant(events, news.parse_countries(self.s["news_countries"]), self.s["news_impact"])
 
@@ -393,6 +423,26 @@ class Bot:
         distance = s["atr_mult"] * n / price if s["atr_stop"] != "none" else s["stop_loss_pct"] / 100
         return min(free * 0.99, free * s["risk_pct"] / 100 / distance)
 
+    def _fee_cost(self, order: dict) -> float:
+        market = self.market
+        total = float(fee_in(order, market.quote))
+        others = {}
+        for f in order.get("fills", []):
+            if f["commissionAsset"] == market.base:
+                # on a buy it already came off the quantity received
+                if order.get("side") == "SELL":
+                    total += float(f["commission"]) * float(f["price"])
+            elif f["commissionAsset"] != market.quote:
+                others[f["commissionAsset"]] = others.get(f["commissionAsset"], 0.0) + float(f["commission"])
+        for asset, amount in others.items():
+            try:
+                price = float(self.data.klines(asset + market.quote, "1m", limit=1)["close"].iloc[-1])
+            except (BinanceError, requests.RequestException):
+                log(f"Taxa de {amount:g} {asset} não convertida para {market.quote}, ficou fora do resultado.")
+                continue
+            total += amount * price
+        return total
+
     def buy(self, state: dict, n: float) -> None:
         market, s = self.market, self.s
         if s["atr_stop"] != "none" and not n > 0:
@@ -404,44 +454,93 @@ class Bot:
             log(f"Sinal de compra ignorado: valor da compra ({spend:.2f}) abaixo do mínimo da corretora.")
             return
 
-        order = self.client.market_buy(self.symbol, spend)
+        order = self.client.market_buy(self.symbol, spend, tag=BOT_TAG)
+        estimate_missing_fees(order, market)
         qty = Decimal(order["executedQty"]) - fee_in(order, market.base)
-        cost = float(order["cummulativeQuoteQty"]) + float(fee_in(order, market.quote))
+        cost = float(order["cummulativeQuoteQty"]) + self._fee_cost(order)
         avg = cost / float(qty)
         state["symbol"] = self.symbol
         state["position_qty"] = str(qty)
         state["entry_cost"] = cost
         state["protection"] = None
         state["peak"] = avg
+        state["stop_sl"] = None
+        if s["atr_stop"] != "none":
+            state["stop_sl"] = float(market.round_price(avg - s["atr_mult"] * n))
+        elif s["stop_loss_pct"]:
+            state["stop_sl"] = float(market.round_price(avg * (1 - s["stop_loss_pct"] / 100)))
+        state["stop_tp"] = float(market.round_price(avg * (1 + s["take_profit_pct"] / 100))) if s["take_profit_pct"] else None
         save_state(state)
         record_trade(self.symbol, "COMPRA", qty, cost, None)
         log(f"COMPRA: {qty} {market.base} por {cost:.2f} {market.quote}")
+        self._restore_protection(state)
 
-        sl_price = None
-        if s["atr_stop"] != "none":
-            sl_price = market.round_price(avg - s["atr_mult"] * n)
-        elif s["stop_loss_pct"]:
-            sl_price = market.round_price(avg * (1 - s["stop_loss_pct"] / 100))
-        tp_price = market.round_price(avg * (1 + s["take_profit_pct"] / 100)) if s["take_profit_pct"] else None
-        if sl_price or tp_price:
+    def _restore_protection(self, state: dict) -> bool:
+        sl, tp = state["stop_sl"], state["stop_tp"]
+        if state["protection"] or Decimal(state["position_qty"]) <= 0 or not (sl or tp):
+            return False
+        if state["pending_ids"]:
+            self._resolve_pending(state)
+            if self._check_protection(state):
+                return True
+            if state["protection"]:
+                return False
+        # the order goes to self.client, so check against its price, not the market data one
+        price = float(self.client.klines(self.symbol, "1m", limit=1)["close"].iloc[-1])
+        if (sl and price <= sl) or (tp and price >= tp):
+            log(f"Preço ({price:.{self.market.digits}f}) já passou do stop, vendendo agora.")
+            self.sell(state)
+            return True
+        qty = self.market.floor_qty(Decimal(state["position_qty"]))
+        try:
+            state["protection"] = self._place_protection(
+                state, qty, self.market.round_price(sl) if sl else None, self.market.round_price(tp) if tp else None
+            )
+            state["pending_ids"] = []
+        except (BinanceError, requests.RequestException) as e:
+            log(f"Compra sem stop, tentando criar de novo no próximo candle: {e}")
+        save_state(state)
+        return False
+
+    def _resolve_pending(self, state: dict) -> None:
+        # a placement whose response was lost may still have gone through, and even filled since
+        if not state["pending_ids"]:
+            return
+        found = []
+        for client_id in state["pending_ids"]:
             try:
-                state["protection"] = self._place_protection(market.floor_qty(qty), sl_price, tp_price)
-                save_state(state)
+                found.append(self.client.get_order_by_client_id(self.symbol, client_id))
             except BinanceError as e:
-                log(f"Compra feita, mas os stops NÃO foram criados: {e}")
+                if e.code != ORDER_NOT_FOUND:
+                    raise
+        state["pending_ids"] = []
+        if found:
+            stops = [float(o["stopPrice"]) for o in found if o["type"].startswith("STOP_LOSS")]
+            gains = [float(o["price"]) for o in found if o["type"] == "LIMIT_MAKER"]
+            state["protection"] = {
+                "list_id": found[0]["orderListId"],
+                "order_ids": [o["orderId"] for o in found],
+                "sl": stops[0] if stops else None,
+                "tp": gains[0] if gains else None,
+            }
+            log("Stops do robô encontrados na Binance, acompanhando de novo.")
+        save_state(state)
 
-    def _place_protection(self, qty: Decimal, sl_price: str | None, tp_price: str | None) -> dict:
+    def _place_protection(self, state: dict, qty: Decimal, sl_price: str | None, tp_price: str | None) -> dict:
         quantity = format(qty, "f")
+        sl_id, tp_id = client_order_id(BOT_TAG, "sl"), client_order_id(BOT_TAG, "tp")
+        state["pending_ids"] = [i for i, price in ((sl_id, sl_price), (tp_id, tp_price)) if price]
+        save_state(state)
         if sl_price and tp_price:
-            r = self.client.oco_sell(self.symbol, quantity, tp_price, sl_price, tag=BOT_TAG)
+            r = self.client.oco_sell(self.symbol, quantity, tp_price, sl_price, tp_client_id=tp_id, sl_client_id=sl_id)
             order_ids, list_id = [o["orderId"] for o in r["orders"]], r["orderListId"]
             log(f"Stops criados: stop loss {sl_price}, stop gain {tp_price}")
         elif sl_price:
-            r = self.client.stop_loss_sell(self.symbol, quantity, sl_price, tag=BOT_TAG)
+            r = self.client.stop_loss_sell(self.symbol, quantity, sl_price, client_id=sl_id)
             order_ids, list_id = [r["orderId"]], -1
             log(f"Stop criado: stop loss {sl_price}")
         else:
-            r = self.client.take_profit_sell(self.symbol, quantity, tp_price, tag=BOT_TAG)
+            r = self.client.take_profit_sell(self.symbol, quantity, tp_price, client_id=tp_id)
             order_ids, list_id = [r["orderId"]], -1
             log(f"Stop criado: stop gain {tp_price}")
         return {
@@ -452,13 +551,12 @@ class Bot:
         }
 
     def _trail(self, state: dict, close: float, n: float) -> bool:
-        protection = state.get("protection")
-        if not protection or not protection.get("sl") or not n > 0:
+        if not state["stop_sl"] or not n > 0:
             return False
         peak = max(state.get("peak") or close, close)
         state["peak"] = peak
         new_sl = float(self.market.round_price(peak - self.s["atr_mult"] * n))
-        if new_sl <= protection["sl"]:
+        if new_sl <= state["stop_sl"]:
             save_state(state)
             return False
         if new_sl >= close:
@@ -466,19 +564,12 @@ class Bot:
             self.sell(state)
             return True
 
-        tp = protection.get("tp")
-        self._cancel_protection(state)
+        if self._cancel_protection(state):
+            return True
+        state["stop_sl"] = new_sl
         save_state(state)
-        qty = self.market.floor_qty(Decimal(state["position_qty"]))
-        try:
-            state["protection"] = self._place_protection(
-                qty, self.market.round_price(new_sl), self.market.round_price(tp) if tp else None
-            )
-            log(f"Stop móvel subiu para {new_sl:.{self.market.digits}f}")
-        except BinanceError as e:
-            log(f"Não foi possível subir o stop móvel, a posição ficou sem stop: {e}")
-        save_state(state)
-        return False
+        log(f"Stop móvel subiu para {new_sl:.{self.market.digits}f}")
+        return self._restore_protection(state)
 
     def _check_protection(self, state: dict) -> bool:
         protection = state.get("protection")
@@ -491,7 +582,8 @@ class Bot:
             o = filled[0]
             kind = "STOP LOSS" if o["type"].startswith("STOP_LOSS") else "STOP GAIN"
             qty = Decimal(o["executedQty"])
-            proceeds = float(o["cummulativeQuoteQty"])
+            o["fills"] = self.client.order_fills(self.symbol, o["orderId"])
+            proceeds = float(o["cummulativeQuoteQty"]) - self._fee_cost(o)
             pnl = proceeds - state["entry_cost"]
             state["day_pnl"] += pnl
             record_trade(self.symbol, kind, qty, proceeds, pnl)
@@ -501,36 +593,42 @@ class Bot:
             return True
 
         if all(o["status"] in DONE_STATUSES for o in orders):
-            log("Os stops do robô foram cancelados fora dele. A posição continua aberta, sem stop.")
+            log("Os stops do robô foram cancelados fora dele. Criando de novo.")
             state["protection"] = None
             save_state(state)
         return False
 
-    def _cancel_protection(self, state: dict) -> None:
+    def _cancel_protection(self, state: dict) -> bool:
         protection = state.get("protection")
         if not protection:
-            return
+            return False
         try:
             if protection["list_id"] != -1:
                 self.client.cancel_order_list(self.symbol, protection["list_id"])
             else:
                 self.client.cancel_order(self.symbol, protection["order_ids"][0])
         except BinanceError:
-            pass
+            # a stop that fills after the last check can no longer be cancelled
+            if self._check_protection(state):
+                return True
+            if state["protection"]:
+                raise
         state["protection"] = None
+        return False
 
     def sell(self, state: dict) -> None:
-        if self._check_protection(state):
+        self._resolve_pending(state)
+        if self._check_protection(state) or self._cancel_protection(state):
             return
-        self._cancel_protection(state)
 
         market = self.market
         qty = market.floor_qty(Decimal(state["position_qty"]))
         if qty < market.min_qty:
             log(f"Quantidade {qty} abaixo do mínimo para vender. Posição zerada no registro.")
         else:
-            order = self.client.market_sell(self.symbol, format(qty, "f"))
-            proceeds = float(order["cummulativeQuoteQty"]) - float(fee_in(order, market.quote))
+            order = self.client.market_sell(self.symbol, format(qty, "f"), tag=BOT_TAG)
+            estimate_missing_fees(order, market)
+            proceeds = float(order["cummulativeQuoteQty"]) - self._fee_cost(order)
             pnl = proceeds - state["entry_cost"]
             state["day_pnl"] += pnl
             record_trade(self.symbol, "VENDA", qty, proceeds, pnl)
@@ -541,6 +639,9 @@ class Bot:
         state["position_qty"] = "0"
         state["entry_cost"] = 0.0
         state["protection"] = None
+        state["stop_sl"] = None
+        state["stop_tp"] = None
+        state["pending_ids"] = []
         state["peak"] = None
         save_state(state)
 
