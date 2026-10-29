@@ -6,3 +6,5 @@ trades.csv
 bot.log
 bot.lock
 settings.json
+build/
+RoboTrader.exe

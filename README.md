@@ -17,6 +17,7 @@ painel fica salvo em `settings.json` e tem prioridade.
 | `bot.py` | Robô ao vivo: compra e vende na testnet |
 | `binance_client.py` | Conversa com a API da Binance |
 | `app.py` e `ui/` | Painel visual: gráfico ao vivo, saldo, posição e operações |
+| `build.ps1` | Gera o `RoboTrader.exe` |
 
 ## Instalação
 
@@ -110,8 +111,24 @@ Os stops ficam na Binance e funcionam com o painel fechado. As compras manuais n
 "Posição do robô": o robô só cuida do que ele mesmo comprou. A Binance aceita no máximo 5 ordens
 de stop abertas por par.
 
-Precisa de internet (o gráfico é carregado da unpkg.com) e do Microsoft Edge WebView2, que já vem
-no Windows 10 e 11.
+Precisa do Microsoft Edge WebView2, que já vem no Windows 10 e 11.
+
+### Gerar o .exe
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+Gera o `RoboTrader.exe` na pasta do projeto. Ele não precisa de Python instalado e lê e grava os
+arquivos (`.env`, `settings.json`, `state.json`, `bot.log`, `trades.csv`) na pasta onde estiver.
+Para usar em outra pasta ou outro computador, copie o `.exe` junto com o `.env`.
+
+O `config.py` vai embutido no `.exe`: depois de mudar algo nele (como `USE_TESTNET`), gere o `.exe`
+de novo. Alguns antivírus acusam programas gerados pelo PyInstaller como suspeitos sem motivo. Se
+o Windows Defender bloquear, libere o arquivo em "Proteção contra vírus e ameaças".
+
+O gráfico usa a biblioteca [Lightweight Charts](https://github.com/tradingview/lightweight-charts)
+da TradingView (licença Apache 2.0, em `ui/vendor/`).
 
 ## 3. Dinheiro real (só depois de semanas na testnet)
 

@@ -16,7 +16,13 @@ import config
 from binance_client import INTERVAL_MS, BinanceClient, BinanceError
 from strategy import BUY, SELL, add_signals
 
-BASE_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+    RESOURCE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).resolve().parent
+    RESOURCE_DIR = BASE_DIR
+
 STATE_FILE = BASE_DIR / "state.json"
 TRADES_FILE = BASE_DIR / "trades.csv"
 LOG_FILE = BASE_DIR / "bot.log"

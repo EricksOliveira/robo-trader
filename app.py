@@ -9,13 +9,13 @@ import webview
 import config
 from binance_client import INTERVAL_MS, BinanceError
 from bot import (
-    BASE_DIR,
     BOT_TAG,
     INTERVALS,
     LOCK_FILE,
     LOG_FILE,
     Bot,
     InstanceLock,
+    RESOURCE_DIR,
     Market,
     fee_in,
     load_settings,
@@ -318,7 +318,7 @@ def main() -> None:
     api = Api()
     webview.create_window(
         "Robô Trader",
-        str(BASE_DIR / "ui" / "index.html"),
+        str(RESOURCE_DIR / "ui" / "index.html"),
         js_api=api,
         width=1280,
         height=860,
