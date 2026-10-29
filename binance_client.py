@@ -104,8 +104,11 @@ class BinanceClient:
         return pd.concat(frames, ignore_index=True).drop_duplicates("open_time").reset_index(drop=True)
 
     def balances(self) -> dict[str, float]:
+        return {asset: b["free"] for asset, b in self.full_balances().items()}
+
+    def full_balances(self) -> dict[str, dict]:
         account = self._request("GET", "/api/v3/account", signed=True)
-        return {b["asset"]: float(b["free"]) for b in account["balances"]}
+        return {b["asset"]: {"free": float(b["free"]), "locked": float(b["locked"])} for b in account["balances"]}
 
     def market_buy(self, symbol: str, quote_amount: float) -> dict:
         params = {"symbol": symbol, "side": "BUY", "type": "MARKET", "quoteOrderQty": f"{quote_amount:.2f}"}
@@ -114,3 +117,39 @@ class BinanceClient:
     def market_sell(self, symbol: str, quantity: str) -> dict:
         params = {"symbol": symbol, "side": "SELL", "type": "MARKET", "quantity": quantity}
         return self._request("POST", "/api/v3/order", params, signed=True)
+
+    def market_sell_quote(self, symbol: str, quote_amount: float) -> dict:
+        params = {"symbol": symbol, "side": "SELL", "type": "MARKET", "quoteOrderQty": f"{quote_amount:.2f}"}
+        return self._request("POST", "/api/v3/order", params, signed=True)
+
+    def stop_loss_sell(self, symbol: str, quantity: str, stop_price: str) -> dict:
+        params = {"symbol": symbol, "side": "SELL", "type": "STOP_LOSS", "quantity": quantity, "stopPrice": stop_price}
+        return self._request("POST", "/api/v3/order", params, signed=True)
+
+    def take_profit_sell(self, symbol: str, quantity: str, price: str) -> dict:
+        params = {"symbol": symbol, "side": "SELL", "type": "LIMIT_MAKER", "quantity": quantity, "price": price}
+        return self._request("POST", "/api/v3/order", params, signed=True)
+
+    def oco_sell(self, symbol: str, quantity: str, take_profit: str, stop_loss: str) -> dict:
+        params = {
+            "symbol": symbol,
+            "side": "SELL",
+            "quantity": quantity,
+            "aboveType": "LIMIT_MAKER",
+            "abovePrice": take_profit,
+            "belowType": "STOP_LOSS",
+            "belowStopPrice": stop_loss,
+        }
+        return self._request("POST", "/api/v3/orderList/oco", params, signed=True)
+
+    def open_orders(self, symbol: str) -> list[dict]:
+        return self._request("GET", "/api/v3/openOrders", {"symbol": symbol}, signed=True)
+
+    def cancel_order(self, symbol: str, order_id: int) -> dict:
+        return self._request("DELETE", "/api/v3/order", {"symbol": symbol, "orderId": order_id}, signed=True)
+
+    def cancel_order_list(self, symbol: str, order_list_id: int) -> dict:
+        return self._request("DELETE", "/api/v3/orderList", {"symbol": symbol, "orderListId": order_list_id}, signed=True)
+
+    def my_trades(self, symbol: str, limit: int = 500) -> list[dict]:
+        return self._request("GET", "/api/v3/myTrades", {"symbol": symbol, "limit": limit}, signed=True)

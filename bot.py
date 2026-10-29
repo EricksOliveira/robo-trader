@@ -74,11 +74,15 @@ class Market:
         filters = {f["filterType"]: f for f in info["filters"]}
         self.step = Decimal(filters["LOT_SIZE"]["stepSize"]).normalize()
         self.min_qty = Decimal(filters["LOT_SIZE"]["minQty"])
+        self.tick = Decimal(filters["PRICE_FILTER"]["tickSize"]).normalize()
         notional = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
         self.min_notional = float(notional.get("minNotional", 0))
 
     def floor_qty(self, qty: Decimal) -> Decimal:
         return qty.quantize(self.step, rounding=ROUND_DOWN)
+
+    def round_price(self, price: float) -> str:
+        return format(Decimal(str(price)).quantize(self.tick), "f")
 
 
 def buy(client: BinanceClient, market: Market, state: dict) -> None:

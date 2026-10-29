@@ -1,4 +1,3 @@
-import csv
 import math
 import threading
 from datetime import datetime
@@ -9,10 +8,12 @@ import webview
 
 import config
 from binance_client import INTERVAL_MS, BinanceError
-from bot import BASE_DIR, TRADES_FILE, Market, load_state, make_client
+from bot import BASE_DIR, Market, fee_in, load_state, make_client
 from strategy import add_signals
 
 INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"]
+TAKE_PROFIT_TYPES = {"LIMIT", "LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+STOP_LOSS_TYPES = {"STOP_LOSS", "STOP_LOSS_LIMIT"}
 
 
 def utc_offset_seconds() -> int:
@@ -27,11 +28,46 @@ def line(df, column: str, offset: int) -> list[dict]:
     ]
 
 
-def read_trades() -> list[dict]:
-    if not TRADES_FILE.exists():
-        return []
-    with TRADES_FILE.open(encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+def group_fills(fills: list[dict]) -> list[dict]:
+    orders = {}
+    for f in fills:
+        o = orders.setdefault(f["orderId"], {"time": f["time"], "buy": f["isBuyer"], "qty": 0.0, "quote": 0.0})
+        o["qty"] += float(f["qty"])
+        o["quote"] += float(f["quoteQty"])
+    result = []
+    for o in sorted(orders.values(), key=lambda o: o["time"]):
+        o["price"] = o["quote"] / o["qty"] if o["qty"] else 0.0
+        o["label"] = datetime.fromtimestamp(o["time"] / 1000).strftime("%d/%m %H:%M")
+        result.append(o)
+    return result
+
+
+def group_open_orders(orders: list[dict]) -> list[dict]:
+    groups = {}
+    for o in orders:
+        key = o["orderListId"] if o["orderListId"] != -1 else f"order-{o['orderId']}"
+        g = groups.setdefault(key, {
+            "list_id": o["orderListId"],
+            "order_id": o["orderId"],
+            "side": o["side"],
+            "qty": float(o["origQty"]) - float(o["executedQty"]),
+            "take_profit": None,
+            "stop_loss": None,
+        })
+        if o["type"] in TAKE_PROFIT_TYPES:
+            g["take_profit"] = float(o["price"]) or float(o["stopPrice"])
+        elif o["type"] in STOP_LOSS_TYPES:
+            g["stop_loss"] = float(o["stopPrice"])
+    return list(groups.values())
+
+
+def percent(value, name: str, limit: float) -> float:
+    if value in (None, ""):
+        return 0.0
+    value = float(value)
+    if not 0 < value < limit:
+        raise ValueError(f"{name} precisa estar entre 0 e {limit:g}%")
+    return value
 
 
 class Api:
@@ -39,6 +75,7 @@ class Api:
         self._client = None
         self._market = None
         self._lock = threading.Lock()
+        self._history = []
 
     def _connect(self):
         with self._lock:
@@ -51,6 +88,8 @@ class Api:
     def _safe(self, fn):
         try:
             return fn()
+        except ValueError as e:
+            return {"error": str(e)}
         except (BinanceError, requests.RequestException) as e:
             self._client = None
             return {"error": str(e)}
@@ -63,6 +102,7 @@ class Api:
             "fast": config.FAST_SMA,
             "slow": config.SLOW_SMA,
             "testnet": config.USE_TESTNET,
+            "trade_usdt": config.TRADE_USDT,
         }
 
     def get_chart(self, interval: str) -> dict:
@@ -70,7 +110,7 @@ class Api:
 
     def _chart(self, interval: str) -> dict:
         if interval not in INTERVAL_MS:
-            return {"error": f"Tempo gráfico inválido: {interval}"}
+            raise ValueError(f"Tempo gráfico inválido: {interval}")
         client, _ = self._connect()
         offset = utc_offset_seconds()
         df = add_signals(client.klines(config.SYMBOL, interval, limit=500), config.FAST_SMA, config.SLOW_SMA)
@@ -83,20 +123,18 @@ class Api:
         period = INTERVAL_MS[interval] // 1000
         first = candles[0]["time"] if candles else 0
         markers = []
-        for t in read_trades():
-            ts = int(datetime.fromisoformat(t["data"]).timestamp())
+        for o in self._history:
+            ts = o["time"] // 1000
             ts = ts - ts % period + offset
             if ts < first:
                 continue
-            is_buy = t["lado"] == "COMPRA"
             markers.append({
                 "time": ts,
-                "position": "belowBar" if is_buy else "aboveBar",
-                "shape": "arrowUp" if is_buy else "arrowDown",
-                "color": "#26a69a" if is_buy else "#ef5350",
-                "text": "C" if is_buy else "V",
+                "position": "belowBar" if o["buy"] else "aboveBar",
+                "shape": "arrowUp" if o["buy"] else "arrowDown",
+                "color": "#26a69a" if o["buy"] else "#ef5350",
+                "text": "C" if o["buy"] else "V",
             })
-        markers.sort(key=lambda m: m["time"])
 
         return {
             "candles": candles,
@@ -110,8 +148,9 @@ class Api:
 
     def _account(self) -> dict:
         client, market = self._connect()
-        balances = client.balances()
+        balances = client.full_balances()
         price = float(client.klines(config.SYMBOL, "1m", limit=1)["close"].iloc[-1])
+        self._history = group_fills(client.my_trades(config.SYMBOL))
         state = load_state()
 
         qty = float(Decimal(state["position_qty"]))
@@ -125,17 +164,88 @@ class Api:
                 "open_pnl": qty * price - entry_cost,
             }
 
+        empty = {"free": 0.0, "locked": 0.0}
         return {
             "base": market.base,
             "quote": market.quote,
-            "base_free": balances.get(market.base, 0.0),
-            "quote_free": balances.get(market.quote, 0.0),
+            "base_balance": balances.get(market.base, empty),
+            "quote_balance": balances.get(market.quote, empty),
             "price": price,
             "position": position,
             "day_pnl": state["day_pnl"],
-            "trades": read_trades()[-20:][::-1],
+            "orders": group_open_orders(client.open_orders(config.SYMBOL)),
+            "history": self._history[-20:][::-1],
             "updated": datetime.now().strftime("%H:%M:%S"),
         }
+
+    def buy(self, amount, stop_loss_pct, take_profit_pct) -> dict:
+        return self._safe(lambda: self._buy(amount, stop_loss_pct, take_profit_pct))
+
+    def _buy(self, amount, stop_loss_pct, take_profit_pct) -> dict:
+        client, market = self._connect()
+        amount = float(amount)
+        stop_loss = percent(stop_loss_pct, "Stop loss", 50)
+        take_profit = percent(take_profit_pct, "Stop gain", 100)
+        if amount < market.min_notional:
+            raise ValueError(f"Valor mínimo por ordem: {market.min_notional:g} {market.quote}")
+
+        order = client.market_buy(config.SYMBOL, amount)
+        executed = Decimal(order["executedQty"])
+        qty = market.floor_qty(executed - fee_in(order, market.base))
+        avg = float(order["cummulativeQuoteQty"]) / float(executed)
+        done = f"Comprado {qty} {market.base} a {avg:,.2f}"
+        if not stop_loss and not take_profit:
+            return {"ok": done}
+
+        quantity = format(qty, "f")
+        sl_price = market.round_price(avg * (1 - stop_loss / 100))
+        tp_price = market.round_price(avg * (1 + take_profit / 100))
+        try:
+            if stop_loss and take_profit:
+                client.oco_sell(config.SYMBOL, quantity, tp_price, sl_price)
+                stops = f"stop loss {sl_price} e stop gain {tp_price}"
+            elif stop_loss:
+                client.stop_loss_sell(config.SYMBOL, quantity, sl_price)
+                stops = f"stop loss {sl_price}"
+            else:
+                client.take_profit_sell(config.SYMBOL, quantity, tp_price)
+                stops = f"stop gain {tp_price}"
+        except BinanceError as e:
+            return {"error": f"{done}, mas o stop NÃO foi criado: {e}"}
+        return {"ok": f"{done}, com {stops}"}
+
+    def sell(self, amount) -> dict:
+        return self._safe(lambda: self._sell(amount))
+
+    def _sell(self, amount) -> dict:
+        client, market = self._connect()
+        amount = float(amount)
+        if amount < market.min_notional:
+            raise ValueError(f"Valor mínimo por ordem: {market.min_notional:g} {market.quote}")
+        order = client.market_sell_quote(config.SYMBOL, amount)
+        avg = float(order["cummulativeQuoteQty"]) / float(order["executedQty"])
+        return {"ok": f"Vendido {order['executedQty']} {market.base} a {avg:,.2f}"}
+
+    def cancel(self, list_id: int, order_id: int) -> dict:
+        return self._safe(lambda: self._cancel(list_id, order_id) or {"ok": "Ordem cancelada"})
+
+    def _cancel(self, list_id: int, order_id: int) -> None:
+        client, _ = self._connect()
+        if list_id != -1:
+            client.cancel_order_list(config.SYMBOL, list_id)
+        else:
+            client.cancel_order(config.SYMBOL, order_id)
+
+    def sell_now(self, list_id: int, order_id: int, qty: float) -> dict:
+        return self._safe(lambda: self._sell_now(list_id, order_id, qty))
+
+    def _sell_now(self, list_id: int, order_id: int, qty: float) -> dict:
+        client, market = self._connect()
+        self._cancel(list_id, order_id)
+        quantity = market.floor_qty(Decimal(str(qty)))
+        order = client.market_sell(config.SYMBOL, format(quantity, "f"))
+        avg = float(order["cummulativeQuoteQty"]) / float(order["executedQty"])
+        return {"ok": f"Stops cancelados e vendido {quantity} {market.base} a {avg:,.2f}"}
 
 
 def main() -> None:
@@ -144,7 +254,7 @@ def main() -> None:
         str(BASE_DIR / "ui" / "index.html"),
         js_api=Api(),
         width=1280,
-        height=800,
+        height=860,
         min_size=(900, 600),
         background_color="#131722",
     )

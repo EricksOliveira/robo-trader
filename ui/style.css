@@ -74,7 +74,7 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 
 aside {
-  width: 320px;
+  width: 340px;
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -104,6 +104,48 @@ aside {
 .neg { color: var(--red); }
 
 #position { margin-bottom: 6px; }
+
+.field { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; }
+.field input {
+  width: 110px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font: inherit;
+  text-align: right;
+}
+.field input:focus { outline: none; border-color: var(--accent); }
+
+.hint { font-size: 11px; color: var(--muted); text-align: right; min-height: 14px; }
+.hint.pos { color: var(--green); }
+.hint.neg { color: var(--red); }
+
+.buttons { display: flex; gap: 8px; margin: 10px 0 6px; }
+button.buy, button.sell, .order button {
+  flex: 1;
+  border: none;
+  border-radius: 4px;
+  padding: 8px;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+button.buy { background: var(--green); }
+button.sell { background: var(--red); }
+button:disabled { opacity: 0.5; cursor: wait; }
+
+.msg { font-size: 12px; min-height: 16px; margin-bottom: 4px; }
+.msg.ok { color: var(--green); }
+.msg.error { color: var(--red); }
+
+.order { padding: 8px 0; border-top: 1px solid var(--border); }
+.order:first-child { border-top: none; padding-top: 0; }
+.order .buttons { margin: 6px 0 0; }
+.order button { padding: 5px; font-size: 12px; font-weight: 500; background: var(--border); }
+.order button:hover { background: #363a45; }
 
 .trades { flex: 1; min-height: 160px; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }

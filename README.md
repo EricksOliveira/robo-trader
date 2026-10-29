@@ -74,12 +74,26 @@ UTC). Ao atingir o limite, o robô para de comprar até o dia seguinte.
 python app.py
 ```
 
-Abre uma janela com o gráfico de candles ao vivo, as duas médias, setas nos pontos onde o robô
-comprou (C) e vendeu (V), o saldo, a posição aberta e as últimas operações. Os botões no topo
-mudam o tempo gráfico só do gráfico. O robô continua usando o `INTERVAL` do `config.py`.
+Abre uma janela com o gráfico de candles ao vivo, as duas médias, setas em cada compra (C) e
+venda (V) feita na conta, o saldo, as ordens abertas, a posição do robô e o histórico. Os botões
+no topo mudam o tempo gráfico só do gráfico. O robô continua usando o `INTERVAL` do `config.py`.
 
-Por enquanto o painel só mostra informações, não envia ordens. Ele lê os arquivos do robô, então
-rode o `bot.py` em outra janela do PowerShell para ver as operações aparecerem.
+O robô e o painel são programas separados: rode o `bot.py` em outra janela do PowerShell.
+
+### Ordem manual
+
+- **Comprar**: compra o valor em USDT a mercado. Se preencher stop loss e/ou stop gain (em %),
+  logo depois da compra ele registra a venda automática na Binance, calculada sobre o preço pago:
+  - os dois preenchidos: ordem OCO (quando uma executa, a outra é cancelada);
+  - só stop loss: vende a mercado se o preço cair até o limite;
+  - só stop gain: ordem de venda no preço alvo.
+- **Vender**: vende o valor em USDT a mercado, sem stops.
+- Em **Ordens abertas**, "Cancelar" remove os stops (a moeda continua na conta) e "Vender agora"
+  remove os stops e vende a mercado.
+
+Os stops ficam na Binance e funcionam com o painel fechado. As compras manuais não entram na
+"Posição do robô": o robô só cuida do que ele mesmo comprou. A Binance aceita no máximo 5 ordens
+de stop abertas por par.
 
 Precisa de internet (o gráfico é carregado da unpkg.com) e do Microsoft Edge WebView2, que já vem
 no Windows 10 e 11.
