@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Robô Trader</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header>
+    <div class="title">
+      <span id="symbol">...</span>
+      <span id="mode" class="badge"></span>
+    </div>
+    <div id="intervals" class="intervals"></div>
+    <div id="status" class="status">Conectando...</div>
+  </header>
+
+  <main>
+    <section class="chart-area">
+      <div id="legend" class="legend"></div>
+      <div id="chart"></div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h2>Saldo</h2>
+        <div class="row"><span id="quote-name">USDT</span><b id="quote-free">-</b></div>
+        <div class="row"><span id="base-name">BTC</span><b id="base-free">-</b></div>
+        <div class="row muted"><span>Preço atual</span><span id="price">-</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Posição do robô</h2>
+        <div id="position" class="muted">Sem compra aberta</div>
+        <div class="row"><span>Resultado do dia</span><b id="day-pnl">-</b></div>
+      </div>
+
+      <div class="card trades">
+        <h2>Últimas operações</h2>
+        <table>
+          <thead><tr><th>Hora</th><th>Lado</th><th>Preço</th><th>Resultado</th></tr></thead>
+          <tbody id="trades"></tbody>
+        </table>
+        <div id="no-trades" class="muted">Nenhuma operação ainda</div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

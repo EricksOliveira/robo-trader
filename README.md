@@ -15,6 +15,7 @@ Quando cruza para baixo, vende. Os valores ficam em `config.py`.
 | `backtest.py` | Testa a estratégia no histórico real da Binance (não precisa de chave) |
 | `bot.py` | Robô ao vivo: compra e vende na testnet |
 | `binance_client.py` | Conversa com a API da Binance |
+| `app.py` e `ui/` | Painel visual: gráfico ao vivo, saldo, posição e operações |
 
 ## Instalação
 
@@ -66,6 +67,22 @@ Registros:
 
 O limite de perda diária (`MAX_DAILY_LOSS_USDT`) conta apenas vendas já feitas no dia (horário
 UTC). Ao atingir o limite, o robô para de comprar até o dia seguinte.
+
+## Painel visual
+
+```powershell
+python app.py
+```
+
+Abre uma janela com o gráfico de candles ao vivo, as duas médias, setas nos pontos onde o robô
+comprou (C) e vendeu (V), o saldo, a posição aberta e as últimas operações. Os botões no topo
+mudam o tempo gráfico só do gráfico. O robô continua usando o `INTERVAL` do `config.py`.
+
+Por enquanto o painel só mostra informações, não envia ordens. Ele lê os arquivos do robô, então
+rode o `bot.py` em outra janela do PowerShell para ver as operações aparecerem.
+
+Precisa de internet (o gráfico é carregado da unpkg.com) e do Microsoft Edge WebView2, que já vem
+no Windows 10 e 11.
 
 ## 3. Dinheiro real (só depois de semanas na testnet)
 
