@@ -2,9 +2,9 @@ import argparse
 
 import pandas as pd
 
-import config
-from binance_client import INTERVAL_MS, BinanceClient
-from strategy import BUY, DAY_MS, SELL, add_signals, catalog, catalog_rate_at
+from robotrader import config
+from robotrader.binance_client import INTERVAL_MS, BinanceClient
+from robotrader.strategy import BUY, DAY_MS, SELL, add_signals, catalog, catalog_rate_at
 
 
 def run_backtest(df: pd.DataFrame, capital: float, fee_rate: float) -> dict:

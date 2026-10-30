@@ -9,10 +9,9 @@ from decimal import Decimal
 import requests
 import webview
 
-import config
-import news
-from binance_client import INTERVAL_MS, BinanceError
-from bot import (
+from robotrader import config, news
+from robotrader.binance_client import INTERVAL_MS, BinanceError
+from robotrader.bot import (
     BOT_TAG,
     INTERVALS,
     LOCK_FILE,
@@ -35,7 +34,7 @@ from bot import (
     save_settings,
     validate_settings,
 )
-from strategy import BREAKOUTS, CATALOG, DAY_MS, TREND_PERIOD
+from robotrader.strategy import BREAKOUTS, CATALOG, DAY_MS, TREND_PERIOD
 
 TAKE_PROFIT_TYPES = {"LIMIT", "LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
 STOP_LOSS_TYPES = {"STOP_LOSS", "STOP_LOSS_LIMIT"}

@@ -1,12 +1,8 @@
 .env
 .venv/
 __pycache__/
-state.json
-trades.csv
-bot.log
-bot.lock
-settings.json
-news_cache.json
-signals.json
+.agents/
+data/
 build/
+dist/
 RoboTrader.exe

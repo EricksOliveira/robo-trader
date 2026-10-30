@@ -4,9 +4,9 @@ import math
 import numpy as np
 import pandas as pd
 
-import config
-from binance_client import BinanceClient
-from strategy import atr, breakout_rules, sma_cross_rules, with_trend_filter
+from robotrader import config
+from robotrader.binance_client import BinanceClient
+from robotrader.strategy import atr, breakout_rules, sma_cross_rules, with_trend_filter
 
 DAYS = {"1h": 365, "4h": 3 * 365, "1d": 6 * 365}
 STOPS = {

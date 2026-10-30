@@ -12,25 +12,26 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-import config
-import news
-from binance_client import INTERVAL_MS, ORDER_NOT_FOUND, BinanceClient, BinanceError, client_order_id
-from strategy import BREAKOUTS, CATALOG, DAY_MS, STRATEGIES, TREND_PERIOD, atr, candles_needed, catalog, rules_for
+from robotrader import config, news
+from robotrader.binance_client import INTERVAL_MS, ORDER_NOT_FOUND, BinanceClient, BinanceError, client_order_id
+from robotrader.strategy import BREAKOUTS, CATALOG, DAY_MS, STRATEGIES, TREND_PERIOD, atr, candles_needed, catalog, rules_for
 
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
     RESOURCE_DIR = Path(sys._MEIPASS)
 else:
-    BASE_DIR = Path(__file__).resolve().parent
-    RESOURCE_DIR = BASE_DIR
+    RESOURCE_DIR = Path(__file__).resolve().parent
+    BASE_DIR = RESOURCE_DIR.parent
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
 
-STATE_FILE = BASE_DIR / "state.json"
-TRADES_FILE = BASE_DIR / "trades.csv"
-LOG_FILE = BASE_DIR / "bot.log"
-SETTINGS_FILE = BASE_DIR / "settings.json"
-LOCK_FILE = BASE_DIR / "bot.lock"
-NEWS_CACHE_FILE = BASE_DIR / "news_cache.json"
-SIGNALS_FILE = BASE_DIR / "signals.json"
+STATE_FILE = DATA_DIR / "state.json"
+TRADES_FILE = DATA_DIR / "trades.csv"
+LOG_FILE = DATA_DIR / "bot.log"
+SETTINGS_FILE = DATA_DIR / "settings.json"
+LOCK_FILE = DATA_DIR / "bot.lock"
+NEWS_CACHE_FILE = DATA_DIR / "news_cache.json"
+SIGNALS_FILE = DATA_DIR / "signals.json"
 
 BOT_TAG = "bot"
 INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]

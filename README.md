@@ -3,6 +3,10 @@
 Robô de trading para a Binance, feito para aprender. Roda por padrão na **testnet**, com dinheiro
 fictício.
 
+> **Aviso:** projeto de estudo, não é recomendação de investimento. Operar com dinheiro real pode
+> dar prejuízo, e os resultados de backtest e da testnet não garantem nada. Use por sua conta e
+> risco.
+
 Estratégias disponíveis:
 
 - **Médias**: compra quando a média rápida (9) cruza para cima da lenta (21) e vende no cruzamento
@@ -15,39 +19,51 @@ Estratégias disponíveis:
   dia em que o candle mais subiu nos últimos dias e vende depois de alguns candles. Pode usar
   martingale (gale).
 
-Os valores padrão ficam em `config.py`. O que for mudado pelo painel fica salvo em
-`settings.json` e tem prioridade.
+Os valores padrão ficam em `robotrader/config.py`. O que for mudado pelo painel fica salvo em
+`data/settings.json` e tem prioridade.
 
-## Arquivos
+## Estrutura
 
-| Arquivo | O que faz |
-|---|---|
-| `config.py` | Testnet ou real, e os valores padrão do robô (inclusive o par) |
-| `strategy.py` | Calcula as médias e marca os sinais de compra e venda |
-| `backtest.py` | Testa a estratégia no histórico real da Binance (não precisa de chave) |
-| `compare.py` | Compara várias estratégias (médias, Tartarugas, MM200, stops de ATR) |
-| `bot.py` | Robô ao vivo: compra e vende na testnet |
-| `binance_client.py` | Conversa com a API da Binance |
-| `news.py` | Calendário de notícias econômicas (ForexFactory) |
-| `app.py` e `ui/` | Painel visual: gráfico ao vivo, saldo, posição e operações |
-| `build.ps1` | Gera o `RoboTrader.exe` |
+```
+robo-trader/
+├── robotrader/            código do robô
+│   ├── config.py          testnet ou real, e os valores padrão (inclusive o par)
+│   ├── strategy.py        indicadores e sinais de compra e venda
+│   ├── backtest.py        testa uma estratégia no histórico real da Binance (sem chave)
+│   ├── compare.py         compara várias estratégias (médias, Tartarugas, MM200, stops de ATR)
+│   ├── bot.py             robô ao vivo
+│   ├── binance_client.py  conversa com a API da Binance
+│   ├── news.py            calendário de notícias econômicas (ForexFactory)
+│   ├── app.py             painel visual (a janela)
+│   └── ui/                HTML, CSS e JavaScript do painel
+├── data/                  criada ao rodar: registros, estado e configurações salvas
+├── .env.example           modelo do arquivo com as chaves da Binance
+├── build.ps1              gera o RoboTrader.exe em dist/
+└── requirements.txt
+```
+
+`data/`, `.env`, `build/` e `dist/` ficam fora do git.
 
 ## Instalação
 
+Precisa de Windows 10 ou 11 e Python 3.11 ou mais novo.
+
 ```powershell
-cd C:\Server\robo-trader
+git clone https://github.com/EricksOliveira/robo-trader.git
+cd robo-trader
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Nas próximas vezes, basta `cd C:\Server\robo-trader` e `.venv\Scripts\activate`.
+Nas próximas vezes, basta entrar na pasta e rodar `.venv\Scripts\activate`. Todos os comandos
+abaixo rodam na pasta `robo-trader`.
 
 ## 1. Backtest
 
 ```powershell
-python backtest.py
-python backtest.py --days 730 --interval 4h --fast 20 --slow 50
+python -m robotrader.backtest
+python -m robotrader.backtest --days 730 --interval 4h --fast 20 --slow 50
 ```
 
 Compare sempre com a linha "Comprar e segurar". Se o robô não ganha de simplesmente comprar e
@@ -56,8 +72,8 @@ esperar, a estratégia não está ajudando.
 ### Backtest da catalogação
 
 ```powershell
-python backtest.py --catalog --interval 5m
-python backtest.py --catalog --interval 1m --days 60 --rate 75 --hold 2 --gales 2 --stop-win 30
+python -m robotrader.backtest --catalog --interval 5m
+python -m robotrader.backtest --catalog --interval 1m --days 60 --rate 75 --hold 2 --gales 2 --stop-win 30
 ```
 
 Testa a catalogação nos últimos 90 dias (`--days`), refazendo a lista a cada dia só com os dias
@@ -72,8 +88,8 @@ até no último gale.
 ### Comparar estratégias
 
 ```powershell
-python compare.py
-python compare.py --symbol ETHUSDT --intervals 4h,1d --risk 1
+python -m robotrader.compare
+python -m robotrader.compare --symbol ETHUSDT --intervals 4h,1d --risk 1
 ```
 
 Testa várias estratégias ao mesmo tempo no histórico real (1h: 1 ano, 4h: 3 anos, 1d: 6 anos) e
@@ -100,13 +116,13 @@ também vai bem em outra moeda e em outro tempo gráfico.
 4. Teste a conexão:
 
    ```powershell
-   python bot.py --check
+   python -m robotrader.bot --check
    ```
 
 5. Inicie o robô pelo painel (aba **Robô**, veja abaixo) ou pelo PowerShell (Ctrl+C para parar):
 
    ```powershell
-   python bot.py
+   python -m robotrader.bot
    ```
 
 Na testnet, os sinais e o gráfico usam os candles da Binance real (públicos, sem chave), e só as
@@ -119,12 +135,12 @@ vice-versa.
 O robô age uma vez a cada candle fechado (de hora em hora, com tempo gráfico de 1h). Para ver
 operações mais rápido nos testes, use 1m.
 
-Registros:
+Registros, na pasta `data/`:
 
-- `bot.log`: tudo o que o robô fez;
-- `trades.csv`: cada compra, venda e stop executado, com o resultado e o par (abre no Excel);
-- `state.json`: posição atual e stops do robô. Apague só com o robô parado e sem compra aberta.
-- `signals.json`: a lista de sinais do dia, na catalogação.
+- `data/bot.log`: tudo o que o robô fez;
+- `data/trades.csv`: cada compra, venda e stop executado, com o resultado e o par (abre no Excel);
+- `data/state.json`: posição atual e stops do robô. Apague só com o robô parado e sem compra aberta.
+- `data/signals.json`: a lista de sinais do dia, na catalogação.
 
 O stop loss do dia (perda máxima) e o stop win do dia (meta de lucro) contam apenas vendas já
 feitas no dia (horário UTC). Ao atingir um deles, o robô para de comprar até o dia seguinte.
@@ -132,7 +148,7 @@ feitas no dia (horário UTC). Ao atingir um deles, o robô para de comprar até 
 ## Painel visual
 
 ```powershell
-python app.py
+python -m robotrader
 ```
 
 Abre uma janela com o gráfico de candles ao vivo, as duas médias, setas em cada compra (C) e
@@ -141,8 +157,8 @@ direita há três abas: Robô, Manual e Histórico.
 
 ### Aba Robô
 
-Liga e desliga o robô e mostra a posição dele e o registro (`bot.log`) ao vivo. As configurações
-só podem ser mudadas com o robô desligado e são salvas ao ligar.
+Liga e desliga o robô e mostra a posição dele e o registro (`data/bot.log`) ao vivo. As
+configurações só podem ser mudadas com o robô desligado e são salvas ao ligar.
 
 O campo **Par** escolhe a moeda (BTC, ETH, SOL, DOGE e outras, sempre contra USDT) e é salvo na
 hora: o gráfico, o saldo, as ordens abertas, o histórico e a ordem manual passam a ser desse par.
@@ -177,9 +193,10 @@ então a lista não tem sinais de VENDA. Se ele só conseguir comprar depois da 
 horário (por exemplo, logo depois de ligar), pula aquela entrada.
 
 Com **gales**, uma entrada com perda faz o robô comprar de novo logo no candle seguinte, com o dobro
-do valor (`MARTINGALE_FACTOR` em `config.py`), até o número de gales escolhido. Com lucro, ou ao
-perder o último gale, ele volta ao valor normal. O stop loss e o stop win do dia também barram os
-gales. O valor cresce rápido: com 100 USDT e 2 gales, a sequência inteira arrisca 700 USDT.
+do valor (`MARTINGALE_FACTOR` em `robotrader/config.py`), até o número de gales escolhido. Com
+lucro, ou ao perder o último gale, ele volta ao valor normal. O stop loss e o stop win do dia
+também barram os gales. O valor cresce rápido: com 100 USDT e 2 gales, a sequência inteira arrisca
+700 USDT.
 
 Logo depois de cada compra, o robô registra os stops na Binance, iguais aos da ordem manual. Se um
 stop executar, o robô percebe no próximo candle e registra o resultado. Num sinal de venda, ele
@@ -191,10 +208,10 @@ cria o stop de novo no próximo candle. Se o preço já tiver passado do stop, e
 
 Fechar o painel desliga o robô. Os stops que já estão na Binance continuam valendo.
 
-O card **Resultados do robô** soma, a partir do `trades.csv`, os ganhos, as perdas e o total das
-vendas e stops do robô já fechados (com as taxas descontadas, inclusive as pagas em BNB, convertidas
-pelo preço do momento), de hoje, dos últimos 7 ou 30 dias ou
-de tudo. Soma todos os pares, em USDT. Compras manuais e a compra ainda aberta não entram.
+O card **Resultados do robô** soma, a partir do `data/trades.csv`, os ganhos, as perdas e o total
+das vendas e stops do robô já fechados (com as taxas descontadas, inclusive as pagas em BNB,
+convertidas pelo preço do momento), de hoje, dos últimos 7 ou 30 dias ou de tudo. Soma todos os
+pares, em USDT. Compras manuais e a compra ainda aberta não entram.
 
 ### Filtro de notícias
 
@@ -204,11 +221,11 @@ stops continuam funcionando normalmente. O card "Próximas notícias" mostra a l
 regressiva, e um aviso amarelo aparece no topo durante a janela de pausa.
 
 O calendário vem do arquivo público do ForexFactory (`nfs.faireconomy.media`), baixado no máximo a
-cada 4 horas e guardado em `news_cache.json`. O ForexFactory bloqueia quem consulta com frequência
-maior. Os horários já aparecem no fuso do computador. O arquivo não traz o resultado real da
-notícia, só a previsão e o valor anterior. Se o calendário estiver indisponível ou desatualizado
-(mais de 12 horas sem conseguir baixar, e a semana da cópia guardada já acabou), o robô segue sem o
-filtro e avisa no registro, e o painel mostra "Desatualizado".
+cada 4 horas e guardado em `data/news_cache.json`. O ForexFactory bloqueia quem consulta com
+frequência maior. Os horários já aparecem no fuso do computador. O arquivo não traz o resultado
+real da notícia, só a previsão e o valor anterior. Se o calendário estiver indisponível ou
+desatualizado (mais de 12 horas sem conseguir baixar, e a semana da cópia guardada já acabou), o
+robô segue sem o filtro e avisa no registro, e o painel mostra "Desatualizado".
 
 ### Ordem manual
 
@@ -233,22 +250,22 @@ Precisa do Microsoft Edge WebView2, que já vem no Windows 10 e 11.
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-Gera o `RoboTrader.exe` na pasta do projeto. Ele não precisa de Python instalado e lê e grava os
-arquivos (`.env`, `settings.json`, `state.json`, `bot.log`, `trades.csv`) na pasta onde estiver.
-Para usar em outra pasta ou outro computador, copie o `.exe` junto com o `.env`.
+Gera o `dist\RoboTrader.exe`. Ele não precisa de Python instalado, lê o `.env` da pasta onde
+estiver e grava os registros numa pasta `data` ao lado dele. Para usar em outra pasta ou outro
+computador, copie o `.exe` junto com o `.env`.
 
-O `config.py` vai embutido no `.exe`: depois de mudar algo nele (como `USE_TESTNET`), gere o `.exe`
+O `robotrader/config.py` vai embutido no `.exe`: depois de mudar algo nele (como `USE_TESTNET`), gere o `.exe`
 de novo. Alguns antivírus acusam programas gerados pelo PyInstaller como suspeitos sem motivo. Se
 o Windows Defender bloquear, libere o arquivo em "Proteção contra vírus e ameaças".
 
 O gráfico usa a biblioteca [Lightweight Charts](https://github.com/tradingview/lightweight-charts)
-da TradingView (licença Apache 2.0, em `ui/vendor/`).
+da TradingView (licença Apache 2.0, em `robotrader/ui/vendor/`).
 
 ## 3. Dinheiro real (só depois de semanas na testnet)
 
 1. Crie a chave na Binance real com **saque desativado** e restrita ao IP do seu computador.
 2. Coloque as chaves reais no `.env`.
-3. Em `config.py`, mude `USE_TESTNET = False` e comece com um valor por compra pequeno.
+3. Em `robotrader/config.py`, mude `USE_TESTNET = False` e comece com um valor por compra pequeno.
 4. O `bot.py` pede para digitar `DINHEIRO REAL` antes de iniciar, e o painel pede confirmação
    antes de cada ordem e antes de ligar o robô.
 
