@@ -271,3 +271,8 @@ da TradingView (licença Apache 2.0, em `robotrader/ui/vendor/`).
 
 Os preços da testnet não são iguais aos do mercado real. Bons resultados lá não garantem nada
 com dinheiro de verdade.
+
+## Licença
+
+[MIT](LICENSE): pode usar, copiar, modificar e distribuir, mantendo o aviso de copyright. O
+software vem sem garantia nenhuma.
