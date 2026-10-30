@@ -308,6 +308,11 @@ const BOT_FIELDS = {
   trade_usdt: "bot-amount",
   risk_pct: "bot-risk",
   max_daily_loss_usdt: "bot-max-loss",
+  daily_target_usdt: "bot-target",
+  catalog_days: "bot-catalog-days",
+  catalog_rate: "bot-catalog-rate",
+  hold_candles: "bot-hold",
+  martingale_steps: "bot-gales",
   atr_stop: "bot-atr-stop",
   atr_mult: "bot-atr-mult",
   stop_loss_pct: "bot-sl",
@@ -327,6 +332,7 @@ const RECOMMENDED = {
   atr_mult: 2,
   stop_loss_pct: 0,
   take_profit_pct: 0,
+  martingale_steps: 0,
 };
 
 function fillBotForm(settings) {
@@ -341,6 +347,8 @@ function fillBotForm(settings) {
 function updateBotFormVisibility() {
   const visible = {
     sma: $("bot-strategy").value === "sma",
+    catalog: $("bot-strategy").value === "catalog",
+    trend: $("bot-strategy").value !== "catalog",
     fixed: $("bot-sizing").value === "fixed",
     risk: $("bot-sizing").value === "risk",
     atr: $("bot-atr-stop").value !== "none",
@@ -357,6 +365,8 @@ function readBotForm() {
     values[key] = $(id).type === "checkbox" ? $(id).checked : $(id).value;
   }
   if (values.atr_stop !== "none") values.stop_loss_pct = 0;
+  if (values.strategy === "catalog") values.trend_filter = false;
+  else values.martingale_steps = 0;
   return values;
 }
 
@@ -443,7 +453,26 @@ async function refreshBot() {
   if (atBottom) log.scrollTop = log.scrollHeight;
   results = data.results;
   renderResults();
+  renderSignals(data);
   return data;
+}
+
+function renderSignals(data) {
+  $("signals-card").style.display = data.settings.strategy === "catalog" ? "" : "none";
+  const box = $("signals");
+  box.replaceChildren();
+  if (!data.signals) {
+    $("signals-info").textContent = "A lista é gerada quando o robô liga e a cada dia (UTC)";
+    return;
+  }
+  const now = Date.now() / 1000;
+  for (const s of data.signals.signals) {
+    const item = el("div", null, "signal" + (s.time < now ? " past" : ""));
+    item.append(el("span", `${s.label}  COMPRA`), el("span", `${Math.round(s.rate * 100)}%`));
+    box.appendChild(item);
+  }
+  if (!data.signals.signals.length) box.appendChild(el("div", "Nenhum horário passou do acerto mínimo hoje", "muted"));
+  $("signals-info").textContent = `${data.signals.symbol} ${data.signals.interval}, acerto nos dias analisados`;
 }
 
 function applySettingsToChart(settings) {

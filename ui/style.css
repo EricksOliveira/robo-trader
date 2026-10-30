@@ -221,6 +221,10 @@ fieldset:disabled input, fieldset:disabled select { opacity: 0.6; }
 }
 .news-alert.show { display: block; }
 
+.signals { max-height: 180px; overflow-y: auto; }
+.signal { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
+.signal.past { color: var(--muted); }
+
 .news-item { padding: 6px 0; border-top: 1px solid var(--border); }
 .news-item:first-child { border-top: none; padding-top: 0; }
 .news-item.active { color: #f5c518; }

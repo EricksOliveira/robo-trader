@@ -9,8 +9,11 @@ Estratégias disponíveis:
   para baixo;
 - **Tartarugas 20/10 e 55/20** (Richard Dennis): compra quando o fechamento passa da máxima dos
   últimos 20 (ou 55) candles e vende quando fica abaixo da mínima dos últimos 10 (ou 20);
-- **Filtro da média de 200** (Paul Tudor Jones), combinável com qualquer uma: só compra acima da
-  média de 200 candles e vende se o preço cair abaixo dela.
+- **Filtro da média de 200** (Paul Tudor Jones), combinável com as anteriores: só compra acima da
+  média de 200 candles e vende se o preço cair abaixo dela;
+- **Catalogação** (lista de horários, como nos robôs de opções binárias): compra nos horários do
+  dia em que o candle mais subiu nos últimos dias e vende depois de alguns candles. Pode usar
+  martingale (gale).
 
 Os valores padrão ficam em `config.py`. O que for mudado pelo painel fica salvo em
 `settings.json` e tem prioridade.
@@ -49,6 +52,22 @@ python backtest.py --days 730 --interval 4h --fast 20 --slow 50
 
 Compare sempre com a linha "Comprar e segurar". Se o robô não ganha de simplesmente comprar e
 esperar, a estratégia não está ajudando.
+
+### Backtest da catalogação
+
+```powershell
+python backtest.py --catalog --interval 5m
+python backtest.py --catalog --interval 1m --days 60 --rate 75 --hold 2 --gales 2 --stop-win 30
+```
+
+Testa a catalogação nos últimos 90 dias (`--days`), refazendo a lista a cada dia só com os dias
+anteriores, como o robô faz ao vivo. Mostra uma linha sem gale e uma para cada gale até `--gales`,
+com `--trade` USDT por entrada e os stops do dia (`--stop-loss` e `--stop-win`).
+
+A coluna **Subiu** é o acerto da lista: quantas entradas fecharam acima do preço de compra. Compare
+com o "acerto médio prometido pela lista". **Acertos** conta só as entradas com lucro depois das
+taxas, que pesam muito em candles curtos. **Perdeu o gale** mostra quantas vezes a sequência perdeu
+até no último gale.
 
 ### Comparar estratégias
 
@@ -105,9 +124,10 @@ Registros:
 - `bot.log`: tudo o que o robô fez;
 - `trades.csv`: cada compra, venda e stop executado, com o resultado e o par (abre no Excel);
 - `state.json`: posição atual e stops do robô. Apague só com o robô parado e sem compra aberta.
+- `signals.json`: a lista de sinais do dia, na catalogação.
 
-O limite de perda diária conta apenas vendas já feitas no dia (horário UTC). Ao atingir o limite,
-o robô para de comprar até o dia seguinte.
+O stop loss do dia (perda máxima) e o stop win do dia (meta de lucro) contam apenas vendas já
+feitas no dia (horário UTC). Ao atingir um deles, o robô para de comprar até o dia seguinte.
 
 ## Painel visual
 
@@ -141,6 +161,25 @@ em BTC e ETH: Tartarugas 20/10, filtro da média de 200, stop fixo de 2 ATR e te
   desde a compra menos N x ATR). O stop móvel só sobe: a cada candle, o robô cancela o stop antigo
   na Binance e cria um novo mais alto. Não pode ser usado junto com o stop loss %.
 - **Stop loss % e stop gain %**: como antes. O stop gain pode ser combinado com o stop de ATR.
+- **Stop loss do dia e stop win do dia**: param as compras do dia ao perder ou ganhar esse valor em
+  USDT. 0 no stop win desliga.
+
+### Catalogação
+
+Ao ligar o robô e a cada novo dia (00:00 UTC, 21:00 em Brasília), ele baixa os candles dos últimos
+**dias analisados** e calcula, para cada horário do dia, em quantos dias o preço subiu do início
+daquele candle até o fim da **expiração** (em candles). Os horários com **acerto mínimo** ou mais
+viram a lista de COMPRA do dia, mostrada no card "Lista de sinais de hoje" e no registro. Só vale
+para tempos gráficos de 1m a 1h.
+
+No horário da lista, o robô compra e vende depois da expiração. No spot ele só ganha com a alta,
+então a lista não tem sinais de VENDA. Se ele só conseguir comprar depois da metade do candle do
+horário (por exemplo, logo depois de ligar), pula aquela entrada.
+
+Com **gales**, uma entrada com perda faz o robô comprar de novo logo no candle seguinte, com o dobro
+do valor (`MARTINGALE_FACTOR` em `config.py`), até o número de gales escolhido. Com lucro, ou ao
+perder o último gale, ele volta ao valor normal. O stop loss e o stop win do dia também barram os
+gales. O valor cresce rápido: com 100 USDT e 2 gales, a sequência inteira arrisca 700 USDT.
 
 Logo depois de cada compra, o robô registra os stops na Binance, iguais aos da ordem manual. Se um
 stop executar, o robô percebe no próximo candle e registra o resultado. Num sinal de venda, ele

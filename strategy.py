@@ -1,12 +1,15 @@
+import numpy as np
 import pandas as pd
 
 BUY = 1
 SELL = -1
 
 BREAKOUTS = {"turtle_20_10": (20, 10), "turtle_55_20": (55, 20)}
-STRATEGIES = ["sma", *BREAKOUTS]
+CATALOG = "catalog"
+STRATEGIES = ["sma", *BREAKOUTS, CATALOG]
 TREND_PERIOD = 200
 ATR_PERIOD = 20
+DAY_MS = 86_400_000
 
 
 def add_signals(df: pd.DataFrame, fast: int, slow: int) -> pd.DataFrame:
@@ -65,3 +68,28 @@ def candles_needed(s: dict) -> int:
     if s["trend_filter"]:
         lookback = max(lookback, TREND_PERIOD)
     return min(1000, max(lookback, ATR_PERIOD) + 100)
+
+
+def catalog(df: pd.DataFrame, interval_ms: int, days: int, hold: int) -> pd.DataFrame:
+    # rows are UTC days, columns the candle start within the day (ms); each cell is the up rate
+    # over the previous `days` days only, so a day's list never peeks at that day
+    open_time = df["open_time"]
+    exit_time = open_time.shift(-(hold - 1))
+    day = open_time // DAY_MS
+    won = (df["close"].shift(-(hold - 1)) > df["open"]).astype(float)
+    # a window that ends after midnight is only known the next day, too late for that day's list
+    known = (exit_time - open_time == (hold - 1) * interval_ms) & (exit_time // DAY_MS == day)
+    won[~known] = np.nan
+    table = pd.DataFrame({"day": day, "slot": open_time % DAY_MS, "won": won})
+    table = table.pivot(index="day", columns="slot", values="won")
+    table = table.reindex(range(int(table.index.min()), int(table.index.max()) + 2))
+    return table.rolling(days, min_periods=days).mean().shift(1)
+
+
+def catalog_rate_at(open_time: pd.Series, rates: pd.DataFrame) -> np.ndarray:
+    rows = rates.index.get_indexer(open_time // DAY_MS)
+    cols = rates.columns.get_indexer(open_time % DAY_MS)
+    found = (rows >= 0) & (cols >= 0)
+    result = np.full(len(open_time), np.nan)
+    result[found] = rates.to_numpy()[rows[found], cols[found]]
+    return result

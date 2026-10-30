@@ -1,4 +1,5 @@
 import csv
+import json
 import math
 import threading
 import time
@@ -18,6 +19,7 @@ from bot import (
     LOG_FILE,
     NEWS_CACHE_FILE,
     RESOURCE_DIR,
+    SIGNALS_FILE,
     TRADES_FILE,
     SYMBOLS,
     Bot,
@@ -33,7 +35,7 @@ from bot import (
     save_settings,
     validate_settings,
 )
-from strategy import BREAKOUTS, TREND_PERIOD
+from strategy import BREAKOUTS, CATALOG, DAY_MS, TREND_PERIOD
 
 TAKE_PROFIT_TYPES = {"LIMIT", "LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
 STOP_LOSS_TYPES = {"STOP_LOSS", "STOP_LOSS_LIMIT"}
@@ -53,7 +55,9 @@ def line(df, values, offset: int, digits: int) -> list[dict]:
 
 def indicator_lines(df, s: dict) -> list[tuple[str, object, str]]:
     close = df["close"]
-    if s["strategy"] in BREAKOUTS:
+    if s["strategy"] == CATALOG:
+        lines = []
+    elif s["strategy"] in BREAKOUTS:
         entry, exit = BREAKOUTS[s["strategy"]]
         lines = [
             (f"Máx {entry}", df["high"].rolling(entry).max().shift(1), "#4dd0e1"),
@@ -132,6 +136,17 @@ def trade_results() -> dict:
     return results
 
 
+def today_signals(s: dict) -> dict | None:
+    if not SIGNALS_FILE.exists():
+        return None
+    data = json.loads(SIGNALS_FILE.read_text(encoding="utf-8"))
+    if (data["symbol"], data["interval"], data["day"]) != (s["symbol"], s["interval"], int(time.time() * 1000) // DAY_MS):
+        return None
+    for x in data["signals"]:
+        x["label"] = datetime.fromtimestamp(x["time"]).strftime("%H:%M")
+    return data
+
+
 def percent(value, name: str, limit: float) -> float:
     if value in (None, ""):
         return 0.0
@@ -194,10 +209,12 @@ class Api:
             with LOG_FILE.open(encoding="utf-8", errors="replace") as f:
                 lines = [line.rstrip("\n") for line in f.readlines()[-40:]]
         running = self._bot_running()
+        settings = load_settings()
         return {
             "running": running,
             "elsewhere": not running and self._bot_lock.held_elsewhere(),
-            "settings": load_settings(),
+            "settings": settings,
+            "signals": today_signals(settings),
             "log": lines,
             "results": trade_results(),
         }

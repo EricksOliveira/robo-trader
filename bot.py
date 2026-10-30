@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 import config
 import news
 from binance_client import INTERVAL_MS, ORDER_NOT_FOUND, BinanceClient, BinanceError, client_order_id
-from strategy import BREAKOUTS, STRATEGIES, TREND_PERIOD, atr, candles_needed, rules_for
+from strategy import BREAKOUTS, CATALOG, DAY_MS, STRATEGIES, TREND_PERIOD, atr, candles_needed, catalog, rules_for
 
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
@@ -30,6 +30,7 @@ LOG_FILE = BASE_DIR / "bot.log"
 SETTINGS_FILE = BASE_DIR / "settings.json"
 LOCK_FILE = BASE_DIR / "bot.lock"
 NEWS_CACHE_FILE = BASE_DIR / "news_cache.json"
+SIGNALS_FILE = BASE_DIR / "signals.json"
 
 BOT_TAG = "bot"
 INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
@@ -38,7 +39,9 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
 DONE_STATUSES = {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}
 ATR_STOPS = ["none", "fixed", "trailing"]
 SIZINGS = ["fixed", "risk"]
-STRATEGY_NAMES = {"sma": "Médias", "turtle_20_10": "Tartarugas 20/10", "turtle_55_20": "Tartarugas 55/20"}
+CATALOG_INTERVALS = ["1m", "5m", "15m", "30m", "1h"]
+STRATEGY_NAMES = {"sma": "Médias", "turtle_20_10": "Tartarugas 20/10", "turtle_55_20": "Tartarugas 55/20",
+                  CATALOG: "Catalogação"}
 
 
 def log(message: str) -> None:
@@ -65,6 +68,9 @@ def load_state() -> dict:
         "stop_tp": None,
         "pending_ids": [],
         "peak": None,
+        "entry_candle": None,
+        "gale": 0,
+        "gale_due": False,
     }
     if STATE_FILE.exists():
         state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
@@ -97,6 +103,11 @@ def default_settings() -> dict:
         "trend_filter": config.TREND_FILTER,
         "trade_usdt": config.TRADE_USDT,
         "max_daily_loss_usdt": config.MAX_DAILY_LOSS_USDT,
+        "daily_target_usdt": config.DAILY_TARGET_USDT,
+        "catalog_days": config.CATALOG_DAYS,
+        "catalog_rate": config.CATALOG_RATE,
+        "hold_candles": config.HOLD_CANDLES,
+        "martingale_steps": config.MARTINGALE_STEPS,
         "stop_loss_pct": config.STOP_LOSS_PCT,
         "take_profit_pct": config.TAKE_PROFIT_PCT,
         "atr_stop": config.ATR_STOP,
@@ -134,6 +145,11 @@ def validate_settings(values: dict) -> dict:
             "trend_filter": is_true(values.get("trend_filter")),
             "trade_usdt": float(values["trade_usdt"]),
             "max_daily_loss_usdt": float(values["max_daily_loss_usdt"]),
+            "daily_target_usdt": float(values.get("daily_target_usdt") or 0),
+            "catalog_days": int(values.get("catalog_days", config.CATALOG_DAYS)),
+            "catalog_rate": float(values.get("catalog_rate", config.CATALOG_RATE)),
+            "hold_candles": int(values.get("hold_candles", config.HOLD_CANDLES)),
+            "martingale_steps": int(values.get("martingale_steps") or 0),
             "stop_loss_pct": float(values.get("stop_loss_pct") or 0),
             "take_profit_pct": float(values.get("take_profit_pct") or 0),
             "atr_stop": str(values.get("atr_stop", "none")),
@@ -159,6 +175,23 @@ def validate_settings(values: dict) -> dict:
         raise ValueError("O valor por compra precisa ser de pelo menos 5 USDT")
     if s["max_daily_loss_usdt"] <= 0:
         raise ValueError("A perda máxima por dia precisa ser maior que zero")
+    if s["daily_target_usdt"] < 0:
+        raise ValueError("A meta de lucro por dia não pode ser negativa (0 desliga)")
+    if s["strategy"] == CATALOG:
+        if s["interval"] not in CATALOG_INTERVALS:
+            raise ValueError("A catalogação usa tempo gráfico de 1m a 1h")
+        if s["trend_filter"]:
+            raise ValueError("O filtro da média de 200 não vale para a catalogação")
+        if not 5 <= s["catalog_days"] <= 60:
+            raise ValueError("Os dias analisados precisam estar entre 5 e 60")
+        if not 50 < s["catalog_rate"] <= 100:
+            raise ValueError("O acerto mínimo precisa estar entre 50 e 100%")
+        if not 1 <= s["hold_candles"] <= 10:
+            raise ValueError("A expiração precisa estar entre 1 e 10 candles")
+    if not 0 <= s["martingale_steps"] <= 2:
+        raise ValueError("Use de 0 a 2 gales")
+    if s["martingale_steps"] and (s["strategy"] != CATALOG or s["sizing"] != "fixed"):
+        raise ValueError("O martingale só vale na catalogação, com valor fixo por compra")
     if not 0 <= s["stop_loss_pct"] < 50:
         raise ValueError("Stop loss precisa estar entre 0 e 50% (0 desliga)")
     if not 0 <= s["take_profit_pct"] < 100:
@@ -298,23 +331,38 @@ class Bot:
         self.s = settings
         self.symbol = settings["symbol"]
         self.stop_event = stop_event or threading.Event()
+        self.period_ms = INTERVAL_MS[settings["interval"]]
+        self.slots: dict[int, float] = {}
+        self.slots_day = None
 
     def run(self) -> None:
         s = self.s
         name = STRATEGY_NAMES[s["strategy"]]
         if s["strategy"] == "sma":
             name += f" {s['fast_sma']} x {s['slow_sma']}"
+        if s["strategy"] == CATALOG:
+            name += (f" ({s['catalog_days']} dias, acerto mínimo {s['catalog_rate']:g}%, "
+                     f"expiração {s['hold_candles']} candle(s))")
         if s["trend_filter"]:
             name += " + MM200"
         size = f"risco de {s['risk_pct']:g}% por compra" if s["sizing"] == "risk" else f"{s['trade_usdt']:g} USDT por compra"
-        stops = []
+        if s["martingale_steps"]:
+            size += f" e até {s['martingale_steps']} gale(s) de {config.MARTINGALE_FACTOR:g}x"
+        stops = [f"stop loss do dia {s['max_daily_loss_usdt']:g} USDT"]
+        if s["daily_target_usdt"]:
+            stops.append(f"stop win do dia {s['daily_target_usdt']:g} USDT")
         if s["atr_stop"] != "none":
             stops.append(f"stop {'móvel ' if s['atr_stop'] == 'trailing' else ''}{s['atr_mult']:g}N")
         if s["stop_loss_pct"]:
             stops.append(f"stop loss {s['stop_loss_pct']:g}%")
         if s["take_profit_pct"]:
             stops.append(f"stop gain {s['take_profit_pct']:g}%")
-        log(f"Robô iniciado: {self.symbol} {s['interval']}, {name}, {size}" + (", " + " e ".join(stops) if stops else ""))
+        log(f"Robô iniciado: {self.symbol} {s['interval']}, {name}, {size}, " + ", ".join(stops))
+        state = load_state()
+        # a gale only makes sense right after the loss, not hours later after a restart
+        if state["gale_due"] or state["gale"] > s["martingale_steps"]:
+            state["gale"], state["gale_due"] = 0, False
+            save_state(state)
         if s["news_filter"]:
             events = self._news_events()
             if events is None:
@@ -335,7 +383,7 @@ class Bot:
         log("Robô parado.")
 
     def _sleep_until_next_candle(self) -> None:
-        period = INTERVAL_MS[self.s["interval"]] / 1000
+        period = self.period_ms / 1000
         now = self.client.now_ms() / 1000
         deadline = time.monotonic() + (now // period + 1) * period + 5 - now
         while not self.stop_event.is_set() and time.monotonic() < deadline:
@@ -353,14 +401,19 @@ class Bot:
 
         df = self.data.klines(self.symbol, s["interval"], limit=candles_needed(s))
         df = df[df["close_time"] < self.client.now_ms()].reset_index(drop=True)
-        buy_rule, sell_rule = rules_for(df, s)
         n = float(atr(df).iloc[-1])
         last = df.iloc[-1]
+        last_open = int(last["open_time"])
+        next_open = last_open + self.period_ms
+        if s["strategy"] == CATALOG:
+            self._load_catalog(next_open // DAY_MS)
+        else:
+            buy_rule, sell_rule = rules_for(df, s)
 
-        if int(last["open_time"]) == state["last_candle"]:
+        if last_open == state["last_candle"]:
             return
         # saved before acting, so a crash mid-order never repeats the order on restart
-        state["last_candle"] = int(last["open_time"])
+        state["last_candle"] = last_open
         save_state(state)
 
         holding = Decimal(state["position_qty"]) > 0
@@ -370,16 +423,38 @@ class Bot:
             return
         holding = Decimal(state["position_qty"]) > 0
 
-        if buy_rule.iloc[-1] and not holding:
-            if state["day_pnl"] <= -s["max_daily_loss_usdt"]:
-                log("Sinal de compra ignorado: limite de perda diária atingido.")
-            elif blocking := self._news_block():
-                when = datetime.fromtimestamp(blocking["time"]).strftime("%d/%m %H:%M")
-                log(f"Sinal de compra ignorado: notícia {blocking['country']} \"{blocking['title']}\" às {when}.")
-            else:
-                self.buy(state, n)
-        elif sell_rule.iloc[-1] and holding:
+        if s["strategy"] == CATALOG:
+            sell_now = last_open >= (state["entry_candle"] or 0) + (s["hold_candles"] - 1) * self.period_ms
+        else:
+            sell_now = sell_rule.iloc[-1]
+        if holding and sell_now:
             self.sell(state)
+            holding = Decimal(state["position_qty"]) > 0
+        if holding:
+            return
+
+        if s["strategy"] == CATALOG:
+            buy_now = state["gale_due"] or next_open % DAY_MS in self.slots
+        else:
+            buy_now = buy_rule.iloc[-1]
+        if not buy_now:
+            return
+        if state["day_pnl"] <= -s["max_daily_loss_usdt"]:
+            reason = "limite de perda diária (stop loss) atingido"
+        elif s["daily_target_usdt"] and state["day_pnl"] >= s["daily_target_usdt"]:
+            reason = "meta de lucro do dia (stop win) atingida"
+        elif s["strategy"] == CATALOG and self.client.now_ms() - next_open > self.period_ms // 2:
+            reason = "passou da metade do candle do horário"
+        elif blocking := self._news_block():
+            when = datetime.fromtimestamp(blocking["time"]).strftime("%d/%m %H:%M")
+            reason = f"notícia {blocking['country']} \"{blocking['title']}\" às {when}"
+        else:
+            self.buy(state, n)
+            return
+        log(f"{'Gale' if state['gale_due'] else 'Sinal de compra'} ignorado: {reason}.")
+        if state["gale"]:
+            state["gale"], state["gale_due"] = 0, False
+            save_state(state)
 
     def _describe(self, df, n: float, holding: bool, state: dict) -> str:
         s, d = self.s, self.market.digits
@@ -389,6 +464,8 @@ class Bot:
             entry, exit = BREAKOUTS[s["strategy"]]
             parts.append(f"máx{entry} {df['high'].iloc[-entry - 1:-1].max():.{d}f}")
             parts.append(f"mín{exit} {df['low'].iloc[-exit - 1:-1].min():.{d}f}")
+        elif s["strategy"] == CATALOG:
+            parts.append(f"{len(self.slots)} sinais hoje")
         else:
             parts.append(f"SMA{s['fast_sma']} {closes.iloc[-s['fast_sma']:].mean():.{d}f}")
             parts.append(f"SMA{s['slow_sma']} {closes.iloc[-s['slow_sma']:].mean():.{d}f}")
@@ -396,8 +473,29 @@ class Bot:
             parts.append(f"MM200 {closes.iloc[-TREND_PERIOD:].mean():.{d}f}")
         parts.append(f"ATR {n:.{d}f}")
         parts.append("comprado" if holding else "fora")
+        if state["gale"]:
+            parts.append(f"gale {state['gale']}")
         parts.append(f"resultado do dia {state['day_pnl']:+.2f}")
         return " | ".join(parts)
+
+    def _load_catalog(self, day: int) -> None:
+        if self.slots_day == day:
+            return
+        s = self.s
+        log(f"Catalogando os últimos {s['catalog_days']} dias de {self.symbol} {s['interval']}...")
+        df = self.data.history(self.symbol, s["interval"], s["catalog_days"] + 2)
+        df = df[df["close_time"] < self.client.now_ms()].reset_index(drop=True)
+        rates = catalog(df, self.period_ms, s["catalog_days"], s["hold_candles"])
+        row = rates.loc[day]
+        picked = row[row >= s["catalog_rate"] / 100]
+        self.slots = {int(slot): float(rate) for slot, rate in picked.items()}
+        self.slots_day = day
+        signals = [{"time": (day * DAY_MS + slot) // 1000, "rate": rate} for slot, rate in sorted(self.slots.items())]
+        SIGNALS_FILE.write_text(json.dumps({
+            "symbol": self.symbol, "interval": s["interval"], "day": day, "signals": signals,
+        }, indent=2), encoding="utf-8")
+        times = ", ".join(datetime.fromtimestamp(x["time"]).strftime("%H:%M") for x in signals)
+        log(f"Lista de hoje: {len(signals)} sinal(is) de COMPRA" + (f": {times}" if times else ""))
 
     def _news_events(self) -> list[dict] | None:
         events, fetched_at = news.load_events(NEWS_CACHE_FILE)
@@ -415,10 +513,10 @@ class Bot:
             return None
         return news.blocking_event(events, time.time(), s["news_before_min"], s["news_after_min"])
 
-    def _spend(self, n: float, price: float) -> float:
+    def _spend(self, state: dict, n: float, price: float) -> float:
         s = self.s
         if s["sizing"] != "risk":
-            return s["trade_usdt"]
+            return s["trade_usdt"] * config.MARTINGALE_FACTOR ** state["gale"]
         free = self.client.balances().get(self.market.quote, 0.0)
         distance = s["atr_mult"] * n / price if s["atr_stop"] != "none" else s["stop_loss_pct"] / 100
         return min(free * 0.99, free * s["risk_pct"] / 100 / distance)
@@ -449,7 +547,7 @@ class Bot:
             log("Sinal de compra ignorado: ATR ainda não calculado.")
             return
         price = float(self.data.klines(self.symbol, "1m", limit=1)["close"].iloc[-1])
-        spend = self._spend(n, price)
+        spend = self._spend(state, n, price)
         if spend < market.min_notional:
             log(f"Sinal de compra ignorado: valor da compra ({spend:.2f}) abaixo do mínimo da corretora.")
             return
@@ -464,6 +562,8 @@ class Bot:
         state["entry_cost"] = cost
         state["protection"] = None
         state["peak"] = avg
+        state["entry_candle"] = state["last_candle"] + self.period_ms
+        state["gale_due"] = False
         state["stop_sl"] = None
         if s["atr_stop"] != "none":
             state["stop_sl"] = float(market.round_price(avg - s["atr_mult"] * n))
@@ -472,7 +572,8 @@ class Bot:
         state["stop_tp"] = float(market.round_price(avg * (1 + s["take_profit_pct"] / 100))) if s["take_profit_pct"] else None
         save_state(state)
         record_trade(self.symbol, "COMPRA", qty, cost, None)
-        log(f"COMPRA: {qty} {market.base} por {cost:.2f} {market.quote}")
+        label = f"COMPRA (gale {state['gale']})" if state["gale"] else "COMPRA"
+        log(f"{label}: {qty} {market.base} por {cost:.2f} {market.quote}")
         self._restore_protection(state)
 
     def _restore_protection(self, state: dict) -> bool:
@@ -585,10 +686,10 @@ class Bot:
             o["fills"] = self.client.order_fills(self.symbol, o["orderId"])
             proceeds = float(o["cummulativeQuoteQty"]) - self._fee_cost(o)
             pnl = proceeds - state["entry_cost"]
-            state["day_pnl"] += pnl
             record_trade(self.symbol, kind, qty, proceeds, pnl)
             log(f"{kind} executado: {qty} {self.market.base} por {proceeds:.2f} {self.market.quote} "
                 f"(resultado {pnl:+.2f})")
+            self._settle(state, pnl)
             self._clear_position(state)
             return True
 
@@ -630,13 +731,26 @@ class Bot:
             estimate_missing_fees(order, market)
             proceeds = float(order["cummulativeQuoteQty"]) - self._fee_cost(order)
             pnl = proceeds - state["entry_cost"]
-            state["day_pnl"] += pnl
             record_trade(self.symbol, "VENDA", qty, proceeds, pnl)
             log(f"VENDA: {qty} {market.base} por {proceeds:.2f} {market.quote} (resultado {pnl:+.2f})")
+            self._settle(state, pnl)
         self._clear_position(state)
+
+    def _settle(self, state: dict, pnl: float) -> None:
+        state["day_pnl"] += pnl
+        steps = self.s["martingale_steps"]
+        if pnl < 0 and state["gale"] < steps:
+            state["gale"] += 1
+            state["gale_due"] = True
+            log(f"Perda: gale {state['gale']} no próximo candle, com {config.MARTINGALE_FACTOR ** state['gale']:g}x o valor.")
+            return
+        if pnl < 0 and steps:
+            log("Perda também no último gale. Voltando ao valor normal.")
+        state["gale"], state["gale_due"] = 0, False
 
     def _clear_position(self, state: dict) -> None:
         state["position_qty"] = "0"
+        state["entry_candle"] = None
         state["entry_cost"] = 0.0
         state["protection"] = None
         state["stop_sl"] = None

@@ -7,5 +7,6 @@ bot.log
 bot.lock
 settings.json
 news_cache.json
+signals.json
 build/
 RoboTrader.exe
